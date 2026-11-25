@@ -16,6 +16,10 @@ var match_state: CFMatch = null
 var tick := 0
 var empty_since := 0
 var net                      # the Net autoload (untyped: its RPC methods are looked up at runtime)
+var voice_allowed := true    # the host can turn voice chat off for the room
+var chat_log: Array = []     # recent quick-chat lines, attached to reports
+var reports := {}            # reported id -> {reporter id: reason index}
+var banned := {}             # slot ids and addresses the host removed
 
 
 static func make_code() -> String:
@@ -124,6 +128,7 @@ func remove(slot: CFSlot) -> void:
 	## Leaving for good (or the grace period ran out).
 	slots.erase(slot)
 	slot.room_code = ""
+	slot.room_muted = false
 	if match_state:
 		CFSim.remove_player(match_state, slot.id)
 	if host_id == slot.id:
@@ -309,15 +314,141 @@ func roster() -> Array:
 	var r: Array = []
 	for s in slots:
 		r.append({"id": s.id, "name": s.name, "color": s.color.to_html(false), "connected": s.connected, "host": s.id == host_id,
-			"hat": shown(s, "hat"), "face": shown(s, "face")})
+			"hat": shown(s, "hat"), "face": shown(s, "face"), "voice": s.voice_mode != "off" and not s.room_muted, "muted": s.room_muted})
 	return r
 
 
 func broadcast_room() -> void:
-	_broadcast(net.s_room, {"code": code, "private": is_private, "state": state, "roster": roster(), "mode": mode, "map": map_choice})
+	_broadcast(net.s_room, {"code": code, "private": is_private, "state": state, "roster": roster(), "mode": mode, "map": map_choice, "voice_allowed": voice_allowed})
 
 
 func _broadcast(fn: Callable, arg: Variant) -> void:
 	for s in slots:
 		if s.peer != 0:
 			fn.rpc_id(s.peer, arg)
+
+
+# ---------------------------------------------------------------- talking, and keeping it safe
+
+func find_slot(id: String) -> CFSlot:
+	for s in slots:
+		if s.id == id:
+			return s
+	return null
+
+
+func is_banned(slot: CFSlot) -> bool:
+	## By player and Steam account, not address: a whole household or school shares one address.
+	return banned.has(slot.id) or (slot.steamid != "" and banned.has("steam:" + slot.steamid))
+
+
+func hears(a: CFSlot, b: CFSlot, proximity: bool) -> bool:
+	## Can b hear a? Everyone in the lobby and after a match; in a match only those in earshot,
+	## everyone during a meeting, and the voted-out only reach each other.
+	if state != "playing" or match_state == null:
+		return true
+	var m := match_state
+	if m.phase == "won" or m.phase == "lost":
+		return true
+	var pa := m.find_player(a.id)
+	var pb := m.find_player(b.id)
+	if pa == null or pb == null:
+		return pa == null and pb == null   # people watching only reach each other
+	if pa.exiled and not pb.exiled:
+		return false
+	if not proximity or m.meeting["active"] or (pa.aboard and pb.aboard):
+		return true
+	return Vector2(pa.x, pa.y).distance_to(Vector2(pb.x, pb.y)) <= CF.VOICE_RANGE
+
+
+func chat(from: CFSlot, idx: int, target_id: String) -> Array:
+	## Returns who it went to (for tests; slots without a socket are skipped when sending).
+	if from == null or from.room_muted or idx < 0 or idx >= CF.CHAT.size():
+		return []
+	var now := Time.get_ticks_msec()
+	if now - from.chat_at < CF.CHAT_COOLDOWN * 1000:
+		return []
+	var target := find_slot(target_id) if CF.chat_needs_player(idx) else null
+	if CF.chat_needs_player(idx) and target == null:
+		return []
+	if target == null:
+		target_id = ""
+	from.chat_at = now
+	chat_log.append({"t": Time.get_unix_time_from_system(), "id": from.id, "name": from.name, "text": CF.chat_text(idx, target.name if target else "")})
+	if chat_log.size() > CF.CHAT_KEEP:
+		chat_log.pop_front()
+	var to := slots.filter(func(s): return s.connected and (s == from or hears(from, s, false)))
+	for s in to:
+		if s.peer != 0:
+			net.s_chat.rpc_id(s.peer, from.id, idx, target_id)
+	return to
+
+
+func voice(from: CFSlot, seq: int, data: PackedByteArray) -> Array:
+	## Relays one voice packet to everyone in earshot who has voice on. Returns who it went to.
+	if from == null or not voice_allowed or from.room_muted or (from.voice_mode != "push" and from.voice_mode != "open"):
+		return []
+	if data.size() > CF.VOICE_MAX_BYTES:
+		return []
+	# token bucket: a steady stream is fine, a flood is dropped
+	var now := Time.get_ticks_msec()
+	from.voice_tokens = minf(CF.VOICE_MAX_PACKETS, from.voice_tokens + (now - from.voice_tokens_at) * CF.VOICE_MAX_PACKETS / 1000.0)
+	from.voice_tokens_at = now
+	if from.voice_tokens < 1.0:
+		return []
+	from.voice_tokens -= 1.0
+	var to := slots.filter(func(s): return s != from and s.connected and s.voice_mode != "off" and hears(from, s, true))
+	for s in to:
+		if s.peer != 0:
+			net.s_voice.rpc_id(s.peer, from.id, seq, data)
+	return to
+
+
+func set_voice_allowed(slot: CFSlot, on: bool) -> void:
+	if slot and slot.id == host_id and voice_allowed != on:
+		voice_allowed = on
+		broadcast_room()
+
+
+func report(from: CFSlot, target_id: String, reason: int) -> void:
+	var t := find_slot(target_id)
+	if from == null or t == null or t == from:
+		return
+	reason = clampi(reason, 0, CF.REPORT_REASONS.size() - 1)
+	var by: Dictionary = reports.get(target_id, {})
+	var first := not by.has(from.id)
+	by[from.id] = reason
+	reports[target_id] = by
+	if first:
+		net.log_report({"time": Time.get_datetime_string_from_system(true), "room": code, "private": is_private,
+			"reporter": {"id": from.id, "name": from.name, "steamid": from.steamid},
+			"reported": {"id": t.id, "name": t.name, "steamid": t.steamid, "voice": t.voice_mode},
+			"reason": CF.REPORT_REASONS[reason], "reports_in_room": by.size(), "recent_chat": chat_log.duplicate()})
+	if from.peer != 0:
+		net.s_notice.rpc_id(from.peer, "Thanks. Your report was sent, and %s is muted for you." % t.name)
+	if not t.room_muted and by.size() >= CF.report_threshold(connected_count()):
+		t.room_muted = true
+		if by.values().has(0):   # an offensive name: replace it with their animal
+			t.name = CF.animal_of(t.color).capitalize()
+			if match_state:
+				var p := match_state.find_player(t.id)
+				if p:
+					p.name = t.name
+		if t.peer != 0:
+			net.s_notice.rpc_id(t.peer, "Several players reported you, so your voice and chat are off in this room.")
+		print("room %s: %s muted after %d reports" % [code, t.id, by.size()])
+		broadcast_room()
+
+
+func kick(host: CFSlot, target_id: String) -> void:
+	## The host removes someone; they can't come back to this room.
+	var t := find_slot(target_id)
+	if host == null or host.id != host_id or t == null or t == host:
+		return
+	banned[t.id] = true
+	if t.steamid != "":
+		banned["steam:" + t.steamid] = true
+	if t.peer != 0:
+		net.s_removed.rpc_id(t.peer, "The host removed you from the room.")
+	print("room %s: host removed %s" % [code, t.id])
+	remove(t)

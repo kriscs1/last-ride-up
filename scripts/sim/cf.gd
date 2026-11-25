@@ -143,6 +143,46 @@ const STEAM_ITEM_IDS := {
 const STEAM_IDENTITY := "lastrideup"   # GetAuthTicketForWebApi identity, checked by the server
 
 
+# Quick-chat: preset lines only, so nothing typed by players is ever shown to others.
+# "{p}" is replaced with a player the sender picks. Append new lines at the end (they go over the wire by index).
+const CHAT := [
+	"Hi!", "Follow me!", "Help!", "Thanks!", "Sorry!", "Haha!", "Yes", "No", "Wait for me!",
+	"Sunstone here!", "Bring it to the ship!", "Get aboard!", "Fix the bridge!", "Close the valves!",
+	"Where were you?", "I was mining.", "Skip the vote.", "Good game!",
+	"I saw {p} near a vein.", "{p} is suspicious.", "{p} is safe.", "Vote {p}!", "Follow {p}.",
+]
+const CHAT_COOLDOWN := 1.2        # seconds between lines from one player (server enforces)
+const CHAT_KEEP := 30             # lines a room remembers, attached to reports
+
+# Voice: push-to-talk or open mic, relayed by the server to players in earshot.
+const VOICE_MODES := ["off", "listen", "push", "open"]
+const VOICE_RATE := 16000         # samples per second on the wire
+const VOICE_CHUNK := 640          # samples per packet (40 ms)
+const VOICE_RANGE := 750.0        # px: beyond this you can't hear someone (except in meetings and the lobby)
+const VOICE_FULL := 250.0         # px: full volume within this
+const VOICE_MAX_PACKETS := 40     # per second per speaker before the server drops packets
+const VOICE_MAX_BYTES := 400
+
+# Reports
+const REPORT_REASONS := ["Offensive name", "Offensive or hateful speech", "Harassment or bullying", "Sexual content", "Sharing personal info", "Cheating or griefing", "Other"]
+const REPORT_MUTE_AT := 3         # distinct reporters in one room (fewer in small rooms) → server mutes them
+
+
+static func chat_needs_player(idx: int) -> bool:
+	return idx >= 0 and idx < CHAT.size() and String(CHAT[idx]).contains("{p}")
+
+
+static func chat_text(idx: int, player_name := "") -> String:
+	if idx < 0 or idx >= CHAT.size():
+		return ""
+	return String(CHAT[idx]).replace("{p}", player_name)
+
+
+static func report_threshold(players_in_room: int) -> int:
+	## How many different players must report someone before the server mutes them: 3, or fewer in a small room.
+	return clampi(ceili((players_in_room - 1) / 2.0), 2, REPORT_MUTE_AT)
+
+
 static func is_free(part: String, item: String) -> bool:
 	return (FREE_HATS if part == "hat" else FREE_FACES).has(item) or part == "animal"
 

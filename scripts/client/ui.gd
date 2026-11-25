@@ -92,13 +92,16 @@ var _end_players: GridContainer
 var _btn_slider: HSlider
 var _lefty: CheckBox
 var _volume_sliders: Array = []   # [slider, settings key], on the main menu and in the pause menu
-var settings := {"button_scale": 1.0, "left_handed": false, "name": "", "address": "127.0.0.1", "animal": "fox", "hat": "none", "face": "none", "music_volume": 0.6, "sound_volume": 0.8}
+var settings := {"button_scale": 1.0, "left_handed": false, "name": "", "address": "127.0.0.1", "animal": "fox", "hat": "none", "face": "none", "music_volume": 0.6, "sound_volume": 0.8,
+	"voice_mode": "off", "voice_ok": false, "voice_volume": 1.0}
 var _look_preview: LookPreview
 var _look_values := {}
 var _look_try := {"hat": "none", "face": "none"}   # shown in the preview; may be a locked item
 var _buy_buttons := {}
 var _shop_status: Label
 var _look_return := "menu"
+var talk: CFTalkUI
+var _lobby_ids: Array = []      # roster ids in seat order, for lighting up whoever is talking
 
 
 func _ready() -> void:
@@ -115,6 +118,9 @@ func _ready() -> void:
 	_build_end()
 	_build_meeting()
 	_build_look()
+	talk = CFTalkUI.new()
+	add_child(talk)
+	talk.build(self)
 	_apply_settings()
 	show_screen("menu")
 
@@ -223,6 +229,11 @@ func show_screen(screen_name: String) -> void:
 	_hud.visible = screen_name == "" or screen_name == "pause"
 	if screen_name != "":
 		map.close()
+	if talk:
+		var social := screen_name in ["", "pause", "lobby", "meeting", "end"]
+		talk._feed.visible = social
+		if not social:
+			talk.close_chat()
 	touch.visible = screen_name == "" and DisplayServer.is_touchscreen_available()
 	if not touch.visible:
 		touch.release_all()
@@ -437,6 +448,12 @@ func _build_lobby() -> void:
 	_lobby_start.pressed.connect(func(): start_requested.emit())
 	_button(row, "Customize", false).pressed.connect(open_look)
 	_button(row, "Leave", false).pressed.connect(func(): leave_requested.emit())
+	var row2 := HBoxContainer.new()
+	row2.alignment = BoxContainer.ALIGNMENT_CENTER
+	row2.add_theme_constant_override("separation", 10)
+	box.add_child(row2)
+	_button(row2, "Chat (T)", false).pressed.connect(func(): talk.toggle_chat())
+	_button(row2, "Players & voice", false).pressed.connect(func(): talk.open_people("lobby"))
 
 
 func update_lobby(info: Dictionary, my_id: String) -> void:
@@ -445,6 +462,7 @@ func update_lobby(info: Dictionary, my_id: String) -> void:
 	var is_host := false
 	var online := 0
 	var roster: Array = info["roster"]
+	_lobby_ids = roster.map(func(r): return r["id"])
 	for i in _lobby_slots.size():
 		var slot: Dictionary = _lobby_slots[i]
 		if i >= roster.size():
@@ -474,6 +492,13 @@ func update_lobby(info: Dictionary, my_id: String) -> void:
 		_lobby_info.text = "%d player%s here. Best with 6 to 10; you can start with fewer to test." % [online, "" if online == 1 else "s"]
 	else:
 		_lobby_info.text = "Waiting for %s to start…" % host_name
+
+
+func show_speaking(speaking: Dictionary) -> void:
+	for i in mini(_lobby_ids.size(), _lobby_slots.size()):
+		var nm: Label = _lobby_slots[i]["name"]
+		nm.add_theme_color_override("font_color", GOOD if speaking.has(_lobby_ids[i]) else INK)
+	talk.show_speaking(speaking)
 
 
 func _on_map_picked(id: String) -> void:
@@ -566,6 +591,7 @@ func _build_pause() -> void:
 	row.add_theme_constant_override("separation", 10)
 	box.add_child(row)
 	_button(row, "Back to game").pressed.connect(func(): show_screen(""))
+	_button(row, "Players & voice", false).pressed.connect(func(): talk.open_people("pause"))
 	_button(row, "Leave room", false).pressed.connect(func(): leave_requested.emit())
 
 
@@ -645,6 +671,12 @@ func _build_meeting() -> void:
 	box.add_child(_meet_list)
 	_meet_skip = _button(box, "Skip vote", false)
 	_meet_skip.pressed.connect(_vote.bind("skip"))
+	var mrow := HBoxContainer.new()
+	mrow.alignment = BoxContainer.ALIGNMENT_CENTER
+	mrow.add_theme_constant_override("separation", 10)
+	box.add_child(mrow)
+	_button(mrow, "Chat (T)", false).pressed.connect(func(): talk.toggle_chat())
+	_button(mrow, "Players & voice", false).pressed.connect(func(): talk.open_people("meeting"))
 	var n := _label(box, "Most votes is voted out, if it beats Skip and isn't a tie. Their role is revealed.", 12, Color(INK, 0.7))
 	n.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	n.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -845,6 +877,10 @@ func _build_hud() -> void:
 	right.add_child(rt)
 	var tp := _panel(rt)
 	_timer = _label(tp, "5:00", 22, INK, true)
+	var chat_btn := _button(rt, "Chat", false)
+	chat_btn.custom_minimum_size = Vector2(60, 44)
+	chat_btn.focus_mode = Control.FOCUS_NONE
+	chat_btn.pressed.connect(func(): talk.toggle_chat())
 	var map_btn := _button(rt, "Map", false)
 	map_btn.custom_minimum_size = Vector2(56, 44)
 	map_btn.pressed.connect(func(): map_requested.emit())
@@ -1064,6 +1100,8 @@ func _apply_settings() -> void:
 		_lefty.set_pressed_no_signal(settings["left_handed"])
 	for sk in _volume_sliders:
 		sk[0].set_value_no_signal(settings[sk[1]])
+	if talk:
+		talk.set_voice_volume(settings["voice_volume"])
 	settings_changed.emit()
 
 
@@ -1072,6 +1110,8 @@ func _load_settings() -> void:
 	if cfg.load("user://settings.cfg") == OK:
 		for k in settings:
 			settings[k] = cfg.get_value("player", k, settings[k])
+	if not CF.VOICE_MODES.has(settings["voice_mode"]):
+		settings["voice_mode"] = "off"
 	if not CF.ANIMALS.has(settings["animal"]):
 		settings["animal"] = "fox"
 	if not CF.HATS.has(settings["hat"]) or not Store.owns("hat", settings["hat"]):

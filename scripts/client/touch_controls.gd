@@ -11,6 +11,8 @@ var act_held := false
 var jump_pressed := false     # latched until the client consumes them
 var act_pressed := false
 var ability_pressed := false
+var talk_held := false        # push-to-talk
+var talk_enabled := false     # shown only when voice is set to push-to-talk
 
 var act_label := "Use"
 var act_enabled := false
@@ -45,6 +47,7 @@ func release_all() -> void:
 	down = false
 	jump_held = false
 	act_held = false
+	talk_held = false
 	queue_redraw()
 
 
@@ -56,6 +59,8 @@ func _buttons() -> Dictionary:
 	var act_c := jump_c + Vector2(-98, 10) * s
 	var abil_c := jump_c + Vector2(-14, -100) * s
 	var b := {"jump": [jump_c, 43 * s], "act": [act_c, 33 * s], "ability": [abil_c, 30 * s]}
+	if talk_enabled:
+		b["talk"] = [abil_c + Vector2(-92, -6) * s, 26 * s]
 	if left_handed:
 		for k in b:
 			var c: Vector2 = b[k][0]
@@ -86,6 +91,8 @@ func _input(event: InputEvent) -> void:
 						act_pressed = true
 					"ability":
 						ability_pressed = true
+					"talk":
+						talk_held = true
 			elif _in_stick_zone(e.position) and _stick_touch < 0:
 				_stick_touch = e.index
 				_stick_origin = e.position
@@ -103,6 +110,8 @@ func _input(event: InputEvent) -> void:
 					jump_held = false
 				elif k == "act":
 					act_held = false
+				elif k == "talk":
+					talk_held = false
 		queue_redraw()
 	elif event is InputEventScreenDrag:
 		var d := event as InputEventScreenDrag
@@ -152,5 +161,8 @@ func _draw() -> void:
 			"ability":
 				for dx in [-0.22, 0.12]:
 					draw_polyline(PackedVector2Array([c + Vector2(r * dx - r * 0.1, -r * 0.3), c + Vector2(r * dx + r * 0.18, 0), c + Vector2(r * dx - r * 0.1, r * 0.3)]), col, 3.0)
-				if ability_cd > 0:
-					draw_arc(c, r - 3, -PI / 2, -PI / 2 + TAU * ability_cd, 32, Color(0, 0, 0, 0.6), 6.0)
+			"talk":
+				var w := _font.get_string_size("Talk", HORIZONTAL_ALIGNMENT_LEFT, -1, int(12 * button_scale)).x
+				draw_string(_font, c + Vector2(-w / 2, 4 * button_scale), "Talk", HORIZONTAL_ALIGNMENT_LEFT, -1, int(12 * button_scale), col)
+		if k == "ability" and ability_cd > 0:
+				draw_arc(c, r - 3, -PI / 2, -PI / 2 + TAU * ability_cd, 32, Color(0, 0, 0, 0.6), 6.0)

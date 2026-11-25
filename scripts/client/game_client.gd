@@ -36,6 +36,8 @@ var _me_prev := Vector2.ZERO          # last physics-step position, for smooth d
 var _mover_prev := {}
 var _area := ""
 var _foot := 0                      # footstep counter from my run phase
+var voice: CFVoice
+var _room_code := ""
 
 
 func _ready() -> void:
@@ -44,7 +46,15 @@ func _ready() -> void:
 	add_child(view)
 	ui = CFUI.new()
 	add_child(ui)
-	ui.settings_changed.connect(func(): Sfx.set_volumes(ui.settings["music_volume"], ui.settings["sound_volume"]))
+	voice = CFVoice.new()
+	voice.volume_for = _voice_volume
+	voice.test_tone = OS.get_environment("CF_VOICE_TEST_TONE") == "1"
+	add_child(voice)
+	ui.settings_changed.connect(func():
+		Sfx.set_volumes(ui.settings["music_volume"], ui.settings["sound_volume"])
+		voice.voice_volume = ui.settings["voice_volume"])
+	voice.voice_volume = ui.settings["voice_volume"]
+	_wire_talk()
 	Sfx.set_volumes(ui.settings["music_volume"], ui.settings["sound_volume"])
 	Sfx.music("menu")
 	ui.quick_requested.connect(func(): _act(Net.send_quick))
@@ -69,12 +79,77 @@ func _ready() -> void:
 	Net.events_received.connect(_on_events)
 	Net.pong_received.connect(func(ms): rtt = ms if rtt == 0 else int(rtt * 0.7 + ms * 0.3))
 	Net.error_received.connect(func(msg): ui.set_status(msg, true))
+	Net.voice_received.connect(voice.receive)
+	Net.chat_received.connect(ui.talk.show_chat)
+	Net.notice_received.connect(func(msg): ui.toast(msg, "vio"))
+	Net.removed_from_room.connect(_on_removed)
+
+
+# ---------------------------------------------------------------- talking
+
+func _wire_talk() -> void:
+	var t := ui.talk
+	t.chat_requested.connect(func(idx, target):
+		if Net.is_online():
+			Net.send_chat(idx, target))
+	t.voice_mode_requested.connect(_set_voice_mode)
+	t.mute_changed.connect(voice.set_mute)
+	t.mute_all_changed.connect(voice.set_mute_all)
+	t.report_requested.connect(func(id, reason):
+		if Net.is_online():
+			Net.send_report(id, reason))
+	t.kick_requested.connect(func(id):
+		if Net.is_online():
+			Net.send_kick(id))
+	t.room_voice_requested.connect(func(on):
+		if Net.is_online():
+			Net.send_room_voice(on))
+	_set_voice_mode(ui.settings["voice_mode"])
+
+
+func _set_voice_mode(m: String) -> void:
+	ui.settings["voice_mode"] = m
+	ui._save_settings()
+	voice.set_mode(m)
+	ui.talk.set_mode(m)
+	ui.touch.talk_enabled = m == "push"
+	ui.touch.queue_redraw()
+	if Net.is_online() and my_id != "":
+		Net.send_voice_mode(m)
+
+
+func _voice_volume(id: String) -> float:
+	## Full volume close by, fading out to nothing at the edge of earshot.
+	if world == null or world.phase == "won" or world.phase == "lost" or world.meeting["active"]:
+		return 1.0
+	var p := world.find_player(id)
+	if p == null or me == null or me.exiled or (p.aboard and me.aboard):
+		return 1.0
+	var d := Vector2(p.x, p.y).distance_to(Vector2(me_draw.x, me_draw.y))
+	return clampf(1.0 - (d - CF.VOICE_FULL) / (CF.VOICE_RANGE - CF.VOICE_FULL), 0.0, 1.0)
+
+
+func _on_removed(msg: String) -> void:
+	in_room = false
+	room = {}
+	_room_code = ""
+	_clear_world()
+	voice.reset_room()
+	ui.talk.clear_feed()
+	ui.show_screen("menu")
+	ui.set_status(msg, true)
+
+
+func _typing() -> bool:
+	var f := get_viewport().gui_get_focus_owner()
+	return f is LineEdit or f is TextEdit
 
 
 func _register_actions() -> void:
 	var keys := {
 		"move_left": [KEY_A, KEY_LEFT], "move_right": [KEY_D, KEY_RIGHT], "move_down": [KEY_S, KEY_DOWN], "move_up": [KEY_W, KEY_UP],
 		"jump": [KEY_SPACE, KEY_K], "interact": [KEY_E, KEY_F, KEY_ENTER], "ability": [KEY_SHIFT, KEY_J], "menu": [KEY_ESCAPE], "map": [KEY_M, KEY_TAB],
+		"talk": [KEY_V], "chat": [KEY_T],
 	}
 	for action in keys:
 		if not InputMap.has_action(action):
@@ -96,7 +171,15 @@ func _register_actions() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if ui.current_screen() == "meeting":
+	if event.is_action_pressed("chat") and in_room and not _typing() and ui.current_screen() in ["", "lobby", "meeting", "end", "pause"]:
+		ui.talk.toggle_chat()
+		get_viewport().set_input_as_handled()
+		return
+	if event.is_action_pressed("menu") and ui.talk.chat_open():
+		ui.talk.close_chat()
+		get_viewport().set_input_as_handled()
+		return
+	if ui.current_screen() == "meeting" or ui.current_screen() == "people":
 		return
 	# Traitors: number keys 1-5 sabotage (the panel buttons do the same)
 	if event is InputEventKey and event.pressed and not event.echo and world and info.get("role", "") == "traitor" and ui.current_screen() == "":
@@ -177,6 +260,7 @@ func _on_welcome(id: String, tok: String) -> void:
 	my_id = id
 	token = tok
 	ui.set_status("")
+	Net.send_voice_mode(ui.settings["voice_mode"])
 	_send_look()   # before joining a room, so the preferred animal is free to be given
 	if pending_action.is_valid():
 		var a := pending_action
@@ -189,7 +273,10 @@ func _leave() -> void:
 		Net.send_leave()
 	in_room = false
 	room = {}
+	_room_code = ""
 	_clear_world()
+	voice.reset_room()
+	ui.talk.clear_feed()
 	ui.show_screen("menu")
 
 
@@ -215,11 +302,22 @@ func _clear_world() -> void:
 func _on_room(info: Dictionary) -> void:
 	room = info
 	in_room = true
+	if info["code"] != _room_code:
+		_room_code = info["code"]
+		voice.reset_room()
+		ui.talk.muted.clear()
+		ui.talk.clear_feed()
 	ui.update_lobby(info, my_id)
+	ui.talk.set_room(info, my_id)
+	voice.room_allowed = info.get("voice_allowed", true)
+	voice.self_muted = _roster_entry(my_id).get("muted", false)
+	voice._update_mic()
 	if info["state"] == "lobby" and not end_shown:
 		_clear_world()
 		if ui.current_screen() == "look":
 			ui._look_return = "lobby"   # stay in Customize; Done goes back to the lobby
+		elif ui.current_screen() == "people":
+			ui.talk.set_return("lobby")
 		else:
 			ui.show_screen("lobby")
 	elif info["state"] == "playing" and world == null and ui.current_screen() == "menu":
@@ -377,9 +475,14 @@ func _on_snapshot(s: Dictionary) -> void:
 		if ally:
 			ally.role = "traitor"
 	if world.meeting["active"] and ui.current_screen() != "meeting" and not end_shown:
-		ui.open_meeting(world, my_id)
+		if ui.current_screen() == "people":
+			ui.talk.set_return("meeting")
+		else:
+			ui.open_meeting(world, my_id)
 	elif not world.meeting["active"] and ui.current_screen() == "meeting":
 		ui.show_screen("")
+	elif not world.meeting["active"] and ui.current_screen() == "people" and ui.talk.returns_to() == "meeting":
+		ui.talk.set_return("")
 	for id in remotes.keys():
 		if not seen.has(id):
 			remotes.erase(id)
@@ -500,6 +603,17 @@ func _local_fx(type: String, d: Dictionary) -> void:
 # ---------------------------------------------------------------- per-frame: interpolation, HUD
 
 func _process(delta: float) -> void:
+	voice.push_held = (Input.is_action_pressed("talk") and not _typing()) or ui.touch.talk_held
+	var speaking := {}
+	for r in room.get("roster", []):
+		if voice.speaking(r["id"]) or (r["id"] == my_id and voice.transmitting()):
+			speaking[r["id"]] = true
+	ui.show_speaking(speaking)
+	view.talk.clear()
+	for r in room.get("roster", []):
+		var b := ui.talk.bubble(r["id"])
+		if b != "" or speaking.has(r["id"]):
+			view.talk[r["id"]] = {"bubble": b, "speaking": speaking.has(r["id"])}
 	var song := "menu"
 	if world:
 		song = "" if world.phase == "won" or world.phase == "lost" else ("escape" if world.phase == "escape" else world.map_id)
@@ -601,7 +715,7 @@ func _on_events(list: Array) -> void:
 		return
 	var vault: Vector2 = world.spots["vault"]
 	for e in list:
-		var mine: bool = e.get("id", "") == my_id
+		var mine: bool = str(e.get("id", "")) == my_id
 		match e["type"]:
 			"jump":
 				if not mine:

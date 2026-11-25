@@ -48,6 +48,7 @@ var _won_t := -1.0
 var _now := 0.0
 var _flies: Array = []
 var mover_draw := {}       # mover id → Vector2 (interpolated by the client)
+var talk := {}             # player id → {"bubble": quick-chat text, "speaking": bool}
 var _anchor_y := 0.0       # camera's vertical anchor: follows the ground you stand on, not every jump
 var _back := {}            # Vector2i → true for cave/indoor cells that get a back wall
 var _decor: Node2D
@@ -237,6 +238,26 @@ func _bez(p0: Vector2, p1: Vector2, p2: Vector2, steps := 10) -> Array:
 		var t := i / float(steps)
 		out.append(p0.lerp(p1, t).lerp(p1.lerp(p2, t), t))
 	return out
+
+
+func _draw_talk(n: CanvasItem, top: Vector2, t: Dictionary) -> void:
+	## A speech bubble for quick-chat, and sound waves while someone is talking on voice.
+	var y := top.y
+	if t["speaking"]:
+		var c := Vector2(top.x, y - 4)
+		var pulse := 0.6 + 0.4 * sin(_now * 14.0)
+		n.draw_rect(Rect2(c + Vector2(-5, -3), Vector2(4, 6)), C_INK)
+		n.draw_colored_polygon(PackedVector2Array([c + Vector2(-1, -3), c + Vector2(4, -7), c + Vector2(4, 7), c + Vector2(-1, 3)]), C_INK)
+		for i in 2:
+			n.draw_arc(c + Vector2(4, 0), 5 + i * 4, -0.8, 0.8, 8, Color(0.48, 0.86, 0.42, pulse - i * 0.25), 2.0)
+		y -= 14
+	var s: String = t["bubble"]
+	if s != "":
+		var w := _font.get_string_size(s, HORIZONTAL_ALIGNMENT_LEFT, -1, 12).x + 16
+		var r := Rect2(top.x - w / 2, y - 22, w, 20)
+		n.draw_rect(r, Color(1, 0.97, 0.88, 0.95))
+		n.draw_colored_polygon(PackedVector2Array([Vector2(top.x - 5, r.end.y), Vector2(top.x + 5, r.end.y), Vector2(top.x, r.end.y + 6)]), Color(1, 0.97, 0.88, 0.95))
+		n.draw_string(_font, Vector2(r.position.x + 8, r.end.y - 6), s, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color("#2a1a05"))
 
 
 func _text(n: CanvasItem, pos: Vector2, s: String, size: int, col: Color, outline := 0) -> void:
@@ -1249,6 +1270,11 @@ func _draw_front(n: Node2D) -> void:
 		# A traitor sees fellow traitors' names in violet. Explorers' clients never know anyone's role.
 		var ally: bool = me != null and me.role == "traitor" and p.role == "traitor" and not p.exiled
 		_text(n, Vector2(p.x + p.w / 2, p.y - 22), p.name + tag, 10, Color("#c9a8ff") if ally else p.color, 3)
+	for p in m.players:
+		if not talk.has(p.id) or p.aboard:
+			continue
+		var q: CFPlayer = me if (me and p.id == me.id) else p
+		_draw_talk(n, Vector2(q.x + q.w / 2, q.y - (46 if q == me else 34)), talk[p.id])
 	if me and not act.is_empty() and not me.busy():
 		var label: String = act["label"]
 		if not act.get("ok", true):

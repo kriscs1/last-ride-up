@@ -19,6 +19,10 @@ signal error_received(message: String)
 signal steam_order(product: String, order_id: String, error: String)
 signal steam_owned(items: Array)
 signal steam_prices(prices: Dictionary)
+signal voice_received(from_id: String, seq: int, data: PackedByteArray)
+signal chat_received(from_id: String, idx: int, target_id: String)
+signal notice_received(message: String)
+signal removed_from_room(message: String)
 
 var role := "none"   # none, server, client
 
@@ -243,7 +247,7 @@ func c_quick() -> void:
 		return
 	_leave_current(s)
 	for r in rooms.values():
-		if not r.is_private and r.state == "lobby" and not r.is_full():
+		if not r.is_private and r.state == "lobby" and not r.is_full() and not r.is_banned(s):
 			r.join(s)
 			return
 	_new_room(false).join(s)
@@ -269,6 +273,9 @@ func c_join(code: String) -> void:
 		return
 	if r.is_full():
 		s_error.rpc_id(s.peer, "That room is full.")
+		return
+	if r.is_banned(s):
+		s_error.rpc_id(s.peer, "You can't join that room.")
 		return
 	if r.code != s.room_code:
 		_leave_current(s)
@@ -315,6 +322,63 @@ func c_lobby() -> void:
 	var r := _sender_room()
 	if r:
 		r.request_lobby()
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func c_chat(idx: int, target: String) -> void:
+	var r := _sender_room()
+	if r:
+		r.chat(_sender_slot(), idx, target)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func c_voice_mode(mode: String) -> void:
+	var s := _sender_slot()
+	if s and CF.VOICE_MODES.has(mode) and s.voice_mode != mode:
+		s.voice_mode = mode
+		var r: CFRoom = rooms.get(s.room_code)
+		if r:
+			r.broadcast_room()
+
+
+@rpc("any_peer", "call_remote", "unreliable_ordered", 3)
+func c_voice(seq: int, data: PackedByteArray) -> void:
+	var r := _sender_room()
+	if r:
+		r.voice(_sender_slot(), seq, data)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func c_room_voice(on: bool) -> void:
+	var r := _sender_room()
+	if r:
+		r.set_voice_allowed(_sender_slot(), on)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func c_report(target: String, reason: int) -> void:
+	var r := _sender_room()
+	if r:
+		r.report(_sender_slot(), target, reason)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func c_kick(target: String) -> void:
+	var r := _sender_room()
+	if r:
+		r.kick(_sender_slot(), target)
+
+
+var report_path := "user://reports.jsonl"
+
+func log_report(entry: Dictionary) -> void:
+	## One JSON line per report. Review these and act on them (see README "Player safety").
+	print("REPORT %s" % JSON.stringify(entry))
+	var f := FileAccess.open(report_path, FileAccess.READ_WRITE if FileAccess.file_exists(report_path) else FileAccess.WRITE)
+	if f:
+		f.seek_end()
+		f.store_line(JSON.stringify(entry))
+		f.close()
 
 
 @rpc("any_peer", "call_remote", "unreliable_ordered", 1)
@@ -392,6 +456,12 @@ func send_start() -> void: c_start.rpc_id(1)
 func send_lobby() -> void: c_lobby.rpc_id(1)
 func send_inputs(frames: Array) -> void: c_inputs.rpc_id(1, frames)
 func send_ping() -> void: c_ping.rpc_id(1, Time.get_ticks_msec())
+func send_chat(idx: int, target: String) -> void: c_chat.rpc_id(1, idx, target)
+func send_voice_mode(mode: String) -> void: c_voice_mode.rpc_id(1, mode)
+func send_voice(seq: int, data: PackedByteArray) -> void: c_voice.rpc_id(1, seq, data)
+func send_room_voice(on: bool) -> void: c_room_voice.rpc_id(1, on)
+func send_report(target: String, reason: int) -> void: c_report.rpc_id(1, target, reason)
+func send_kick(target: String) -> void: c_kick.rpc_id(1, target)
 
 
 # ---------------------------------------------------------------- server → client RPCs
@@ -459,3 +529,23 @@ func s_steam_owned(items: Array) -> void:
 @rpc("authority", "call_remote", "reliable")
 func s_steam_prices(prices: Dictionary) -> void:
 	steam_prices.emit(prices)
+
+
+@rpc("authority", "call_remote", "unreliable_ordered", 3)
+func s_voice(from: String, seq: int, data: PackedByteArray) -> void:
+	voice_received.emit(from, seq, data)
+
+
+@rpc("authority", "call_remote", "reliable")
+func s_chat(from: String, idx: int, target: String) -> void:
+	chat_received.emit(from, idx, target)
+
+
+@rpc("authority", "call_remote", "reliable")
+func s_notice(message: String) -> void:
+	notice_received.emit(message)
+
+
+@rpc("authority", "call_remote", "reliable")
+func s_removed(message: String) -> void:
+	removed_from_room.emit(message)

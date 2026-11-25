@@ -61,6 +61,8 @@ Then run the game (F5 in the editor), type a name and press **Quick play** or **
 | Quickstep dash | Arrows button | Shift / J | B |
 | Map | Map button | M / Tab | Back |
 | Menu | Menu button | Esc | Start |
+| Quick chat | Chat button | T | |
+| Push to talk (when voice is on) | Talk button | V (hold) | |
 
 Button size and a left-handed layout are in the in-game menu.
 
@@ -95,6 +97,55 @@ There are no audio files. The `Sfx` autoload (`scripts/client/sfx.gd`) builds ev
 
 To use recorded audio instead, load your files into `_sounds` (effects, by name) and `_inst` (instrument notes pitched at C4, bass at C2) in place of the synthesised ones.
 
+## Chat, voice and player safety
+
+**Quick chat** (T, or the Chat button in the HUD, lobby and meetings) sends one of a fixed list of phrases (`CF.CHAT`). Some phrases name a player, such as "Basil is suspicious." or "Vote Moss!", and you pick the player from the room. There is no free typing, so there is nothing to filter. Lines show as a bubble over the speaker and in a feed at the bottom left. The server allows one line every 1.2 seconds.
+
+**Voice chat is proximity voice, relayed by the game server.** You choose a mode in **Players & voice** (in the lobby, the in-game Menu and meetings):
+
+- **Off** (the default) sends and receives nothing.
+- **Listen only** lets you hear players without a microphone.
+- **Push to talk** sends only while you hold V or the Talk button.
+- **Open mic** sends whenever you are louder than a gate. Use headphones: there is no echo cancellation.
+
+**Who hears whom** (`CFRoom.hears`):
+
+- In the lobby, and after a match, everyone hears everyone.
+- During play, only players within 750 px hear you, getting quieter after 250 px.
+- During a meeting, everyone hears everyone.
+- Voted-out players hear everyone but only reach each other.
+- People watching a match only reach each other.
+
+Quick chat follows the same rules except distance.
+
+Audio is 16 kHz mono in 40 ms packets, IMA ADPCM (`scripts/net/cf_voice_codec.gd`, pure GDScript, about 64 kbit/s per speaker). It goes on its own unreliable channel, so a lost packet costs 40 ms and nothing else. To cut bandwidth by about 3x, replace that one class with an Opus GDExtension. The server drops packets over 400 bytes and anything above 40 packets a second per player.
+
+**Safety tools**
+
+- **Turning voice on:** the first time, a notice explains that nearby players will hear you, asks players not to share personal details, says that anyone can mute and report, and that voice is for ages 13 and up.
+- **Mute** a player (voice and chat, just for you), or **Mute all voices**. Mutes reset when you change room.
+- **Report** a player for a reason: offensive name, hateful speech, harassment, sexual content, sharing personal info, cheating, or other. Reporting also mutes them for you. Each report is written as one JSON line to `user://reports.jsonl` on the server, and printed to its log. A line holds who reported whom, the reason, any Steam ids, and the room's last 30 quick-chat lines. Voice is never recorded.
+- **Room mute:** when enough different players in a room report the same person, the server stops relaying their voice and chat for the rest of the room's life. That is half the other players, at least 2 and at most 3. If anyone gave "Offensive name" as the reason, the person's name is also replaced with their animal.
+- **Host controls:**
+  - Turn voice off for the whole room. Quick chat keeps working.
+  - **Remove** a player. They can't rejoin that room while the server runs, matched by player and Steam account rather than IP address, so housemates aren't caught too.
+
+**Before you ship voice:**
+
+- **Microphone permission.** Godot asks for it when voice is turned on.
+  - Android: tick `RECORD_AUDIO` in the export preset's permissions.
+  - iOS: set *Microphone Usage Description* in the export preset.
+  - macOS: enable the audio-input entitlement and set the usage description.
+- **Store rules for user-generated content.** Apple (guideline 1.2) and Google Play both expect:
+  - a way to block or mute abusive users;
+  - a way to report them;
+  - timely action on reports;
+  - published contact details.
+
+  The game covers the first two. You need to provide the rest: someone who reads `reports.jsonl` and can ban accounts or devices, a contact address in the store listing, and a privacy policy that mentions voice relay and report logs.
+- **Age ratings.** Declare unrestricted voice chat in the questionnaires: IARC on Google Play, the App Store age rating, and Steam's content survey. If you target children, leave voice off for them. Quick chat alone usually satisfies "limited communication".
+- **Removals.** A removed player can still rejoin the room if they restart the game, because a new session gets a new id. Player accounts would close that gap.
+
 ## Project layout
 
 ```text
@@ -102,9 +153,10 @@ project.godot            Godot 4.7, GL Compatibility renderer (best for phones),
 scenes/main.tscn         entry scene → scripts/main.gd
 scripts/sim/             shared rules (no nodes, no network): CF config, CFSim, CFLevel, CFVeins, CFMaps, state classes
 scripts/sim/maps/        one file per map (ASCII layout, rooms with themes, props, sky theme)
-scripts/net/             Net autoload (all RPCs), CFRoom, CFSlot, CFWire
+scripts/net/             Net autoload (all RPCs), CFRoom, CFSlot, CFWire, CFVoiceCodec
 scripts/client/          CFGameClient (prediction, interpolation), CFWorldView (drawing), CFUI, CFTouchControls, CFMapOverlay,
-                         Store (purchases), Sfx (sound effects and music, synthesised at start-up)
+                         Store (purchases), Sfx (sound effects and music, synthesised at start-up),
+                         CFVoice (microphone and playback), CFTalkUI (quick chat, Players & voice screen)
 tests/run_tests.gd       headless rule tests
 tools/                   lint_gd.py (static checks), build_maps.py / check_map.py / render_map_preview.py (maps)
 docs/decisions/          architecture decision records
@@ -140,7 +192,8 @@ Store receipts are not tied to a game account. Someone who copies another player
 
 - Art is procedural placeholder in the target palette, with Godot's default font. Audio is synthesised in code (chiptune-ish); real recordings can replace the samples later without touching the game code.
 - Three maps, one character (Pip). Six characters come in Milestone 5. A fourth map, the Crown Spire tower, is planned.
-- Evidence and witnesses (who was near a tainted vein or a sabotaged lever) come with deduction in Milestone 4. There is no in-game chat yet, so meetings rely on voice chat.
-- Next for virality: an end-of-round replay that shows what the traitors really did, join-by-link with a web build, quick-chat and emotes, then sound and juice.
+- Evidence and witnesses (who was near a tainted vein or a sabotaged lever) come with deduction in Milestone 4.
+- Voice uses ADPCM: Opus would use a third of the bandwidth. There is no echo cancellation, so Open mic needs headphones. Voice has only been tested with a synthetic tone between local clients, not yet with real microphones on phones.
+- Next for virality: an end-of-round replay that shows what the traitors really did, join-by-link with a web build, and emotes.
 - There is no matchmaking service yet: Quick play fills public rooms on the one server you connect to.
 - Inputs and snapshots use Godot's Variant encoding. Packing them into bytes is a later optimisation.

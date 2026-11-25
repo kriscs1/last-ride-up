@@ -47,6 +47,12 @@ func _init() -> void:
 	_test("shop: Google Play purchase signatures are checked", _t_play_signature)
 	_test("shop: App Store API token is a valid ES256 JWT, and transactions are read", _t_apple)
 	_test("shop: Steam ticket buffers become hex in either GodotSteam format", _t_steam_ticket)
+	_test("voice: the codec round-trips speech-like audio cleanly and packets stand alone", _t_voice_codec)
+	_test("voice: only players in earshot hear you; meetings and the voted-out follow the rules", _t_voice_audience)
+	_test("voice: off, muted, oversized and flooding senders are not relayed", _t_voice_limits)
+	_test("chat: set phrases only, a cooldown, and a real player for {p}", _t_chat_rules)
+	_test("safety: reports are logged once each and enough of them mute a player", _t_reports)
+	_test("safety: the host can turn voice off and remove a player for good", _t_host_controls)
 	print("\n%d passed, %d failed" % [_passes, _failures])
 	quit(1 if _failures > 0 else 0)
 
@@ -938,3 +944,248 @@ func _t_steam_ticket() -> String:
 	if a != "deadbe" or b != "01ff":
 		return "got %s and %s" % [a, b]
 	return ""
+
+
+# ---------------------------------------------------------------- voice, chat and safety
+
+func _voice_room(n: int) -> Array:
+	## A room with n slots in a running match, all with voice on. Returns [net, room, slots].
+	var net: Node = load("res://scripts/net/net.gd").new()
+	var r := CFRoom.new("VOICE1", true, net)
+	var ss: Array = []
+	for i in n:
+		var s := _room_slot(r, "p%d" % i, "")
+		s.voice_mode = "push"
+		ss.append(s)
+	r.state = "playing"
+	r.match_state = CFSim.create_match(7, false, n, "verdant")
+	for s in ss:
+		CFSim.add_player(r.match_state, s.id, s.name, s.color)
+	return [net, r, ss]
+
+
+func _ids(slots: Array) -> Array:
+	var out := slots.map(func(s): return s.id)
+	out.sort()
+	return out
+
+
+func _t_voice_codec() -> String:
+	var enc := CFVoiceCodec.new()
+	var pcm := PackedFloat32Array()
+	for i in CF.VOICE_CHUNK * 5:
+		var t := i / float(CF.VOICE_RATE)
+		pcm.append(0.35 * sin(TAU * 180.0 * t) + 0.15 * sin(TAU * 1250.0 * t) * sin(TAU * 3.0 * t))
+	var packets: Array = []
+	for k in 5:
+		packets.append(enc.encode(pcm.slice(k * CF.VOICE_CHUNK, (k + 1) * CF.VOICE_CHUNK)))
+	if (packets[0] as PackedByteArray).size() > CF.VOICE_MAX_BYTES:
+		return "packet too big: %d bytes" % packets[0].size()
+	var out := PackedFloat32Array()
+	for pk in packets:
+		out.append_array(CFVoiceCodec.decode(pk))
+	if out.size() != pcm.size():
+		return "length %d != %d" % [out.size(), pcm.size()]
+	var sig := 0.0
+	var err := 0.0
+	for i in range(CF.VOICE_CHUNK, pcm.size()):   # after the first packet the step size has settled
+		sig += pcm[i] * pcm[i]
+		err += (pcm[i] - out[i]) * (pcm[i] - out[i])
+	var snr := 10.0 * log(sig / maxf(err, 1e-12)) / log(10.0)
+	if snr < 20.0:
+		return "SNR only %.1f dB" % snr
+	# a lost packet: the next one still decodes the same on its own
+	var alone := CFVoiceCodec.decode(packets[3])
+	for i in alone.size():
+		if absf(alone[i] - out[3 * CF.VOICE_CHUNK + i]) > 1e-6:
+			return "packet 4 depends on packet 3"
+	if not CFVoiceCodec.decode(PackedByteArray([1, 2])).is_empty():
+		return "garbage decoded"
+	return ""
+
+
+func _t_voice_audience() -> String:
+	var v := _voice_room(4)
+	var net: Node = v[0]
+	var r: CFRoom = v[1]
+	var ss: Array = v[2]
+	var m := r.match_state
+	var out := ""
+	var pk := PackedByteArray()
+	pk.resize(100)
+	var pl := func(i): return m.find_player(ss[i].id)
+	# p0 and p1 together, p2 just in range, p3 far away
+	for i in 4:
+		var p: CFPlayer = pl.call(i)
+		p.x = 1000.0 + [0.0, 60.0, CF.VOICE_RANGE - 20.0, CF.VOICE_RANGE + 400.0][i]
+		p.y = 500.0
+	var got := _ids(r.voice(ss[0], 1, pk))
+	if got != ["p1", "p2"]:
+		out = "in range: %s" % str(got)
+	# chat reaches everyone, near or far
+	if out == "" and _ids(r.chat(ss[0], 0, "")) != ["p0", "p1", "p2", "p3"]:
+		out = "chat in a match should reach the whole room"
+	# a meeting: everyone hears everyone
+	m.meeting["active"] = true
+	if out == "" and _ids(r.voice(ss[0], 2, pk)) != ["p1", "p2", "p3"]:
+		out = "meeting should reach all"
+	m.meeting["active"] = false
+	# the voted-out reach only each other, but hear everyone
+	(pl.call(3) as CFPlayer).exiled = true
+	(pl.call(3) as CFPlayer).x = 1000.0
+	if out == "" and _ids(r.voice(ss[3], 3, pk)) != []:
+		out = "an exiled player reached the living"
+	if out == "" and not _ids(r.voice(ss[0], 4, pk)).has("p3"):
+		out = "an exiled player nearby should still hear"
+	if out == "" and _ids(r.chat(ss[3], 0, "")) != ["p3"]:
+		out = "an exiled player's chat reached the living"
+	# a listener with voice off gets nothing
+	ss[1].voice_mode = "off"
+	if out == "" and _ids(r.voice(ss[0], 5, pk)).has("p1"):
+		out = "voice-off listener was sent voice"
+	# lobby: everyone
+	ss[1].voice_mode = "listen"
+	r.state = "lobby"
+	if out == "" and _ids(r.voice(ss[0], 6, pk)) != ["p1", "p2", "p3"]:
+		out = "lobby should reach all"
+	net.free()
+	return out
+
+
+func _t_voice_limits() -> String:
+	var v := _voice_room(2)
+	var net: Node = v[0]
+	var r: CFRoom = v[1]
+	var ss: Array = v[2]
+	r.state = "lobby"
+	var out := ""
+	var pk := PackedByteArray()
+	pk.resize(100)
+	ss[0].voice_mode = "listen"
+	if r.voice(ss[0], 1, pk).size() > 0:
+		out = "a listen-only player was relayed"
+	ss[0].voice_mode = "push"
+	var big := PackedByteArray()
+	big.resize(CF.VOICE_MAX_BYTES + 1)
+	if out == "" and r.voice(ss[0], 2, big).size() > 0:
+		out = "an oversized packet was relayed"
+	# flood: far more packets in an instant than a second allows
+	var sent := 0
+	for k in 200:
+		sent += 1 if r.voice(ss[0], 10 + k, pk).size() > 0 else 0
+	if out == "" and sent > CF.VOICE_MAX_PACKETS + 1:
+		out = "flood: %d of 200 relayed" % sent
+	if out == "" and sent < CF.VOICE_MAX_PACKETS - 1:
+		out = "a normal burst was cut short: %d" % sent
+	ss[1].room_muted = true
+	ss[1].voice_tokens = CF.VOICE_MAX_PACKETS
+	if out == "" and r.voice(ss[1], 1, pk).size() > 0:
+		out = "a report-muted player was relayed"
+	net.free()
+	return out
+
+
+func _t_chat_rules() -> String:
+	var v := _voice_room(3)
+	var net: Node = v[0]
+	var r: CFRoom = v[1]
+	var ss: Array = v[2]
+	r.state = "lobby"
+	var out := ""
+	var pick := -1
+	for i in CF.CHAT.size():
+		if CF.chat_needs_player(i):
+			pick = i
+			break
+	if r.chat(ss[0], 0, "").size() != 3:
+		out = "a plain phrase did not reach the room"
+	elif r.chat(ss[0], 1, "").size() > 0:
+		out = "no cooldown"
+	ss[0].chat_at = -100000
+	if out == "" and r.chat(ss[0], CF.CHAT.size(), "").size() > 0:
+		out = "an unknown phrase was sent"
+	ss[0].chat_at = -100000
+	if out == "" and r.chat(ss[0], pick, "nobody").size() > 0:
+		out = "{p} with no such player was sent"
+	ss[0].chat_at = -100000
+	if out == "" and r.chat(ss[0], pick, "p1").size() != 3:
+		out = "{p} with a real player failed"
+	if out == "" and CF.chat_text(pick, "Moss").find("Moss") < 0:
+		out = "name not filled in: %s" % CF.chat_text(pick, "Moss")
+	if out == "" and (r.chat_log.back()["text"] as String).find(ss[1].name) < 0:
+		out = "chat log does not record the line"
+	net.free()
+	return out
+
+
+func _t_reports() -> String:
+	var v := _voice_room(6)
+	var net: Node = v[0]
+	var r: CFRoom = v[1]
+	var ss: Array = v[2]
+	net.report_path = "user://test_reports.jsonl"
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(net.report_path))
+	var out := ""
+	var need := CF.report_threshold(6)
+	var bad: CFSlot = ss[5]
+	bad.name = "Rude Name"
+	r.report(ss[0], bad.id, 0)
+	r.report(ss[0], bad.id, 0)   # the same reporter twice counts once
+	if bad.room_muted and need > 1:
+		out = "muted after one reporter"
+	for i in range(1, need):
+		r.report(ss[i], bad.id, 0)
+	if out == "" and not bad.room_muted:
+		out = "not muted after %d reporters" % need
+	if out == "" and bad.name == "Rude Name":
+		out = "a reported offensive name was kept"
+	if out == "" and r.match_state.find_player(bad.id).name != bad.name:
+		out = "the match still shows the old name"
+	if out == "" and r.chat(bad, 0, "").size() > 0:
+		out = "a muted player can still chat"
+	if out == "" and not r.roster().any(func(e): return e["id"] == bad.id and e["muted"]):
+		out = "the roster does not show the mute"
+	r.report(ss[0], ss[0].id, 1)   # reporting yourself does nothing
+	var lines := FileAccess.get_file_as_string(net.report_path).strip_edges().split("\n")
+	if out == "" and lines.size() != need:
+		out = "%d log lines for %d reporters" % [lines.size(), need]
+	if out == "":
+		var e = JSON.parse_string(lines[0])
+		if not (e is Dictionary) or e["reported"]["id"] != bad.id or e["reason"] != CF.REPORT_REASONS[0] or not e.has("recent_chat"):
+			out = "log line: %s" % lines[0]
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(net.report_path))
+	if out == "" and (CF.report_threshold(2) < 1 or CF.report_threshold(10) > CF.REPORT_MUTE_AT):
+		out = "threshold out of range"
+	net.free()
+	return out
+
+
+func _t_host_controls() -> String:
+	var v := _voice_room(3)
+	var net: Node = v[0]
+	var r: CFRoom = v[1]
+	var ss: Array = v[2]
+	r.state = "lobby"
+	var out := ""
+	var host: CFSlot = r.find_slot(r.host_id)
+	var other: CFSlot = ss[1] if ss[1] != host else ss[2]
+	var pk := PackedByteArray()
+	pk.resize(50)
+	r.set_voice_allowed(other, false)
+	if not r.voice_allowed:
+		out = "a guest turned voice off"
+	r.set_voice_allowed(host, false)
+	if out == "" and r.voice(host, 1, pk).size() > 0:
+		out = "voice relayed after the host turned it off"
+	if out == "" and r.chat(other, 0, "").size() == 0:
+		out = "quick-chat should still work with voice off"
+	r.kick(other, host.id)
+	if out == "" and not r.slots.has(host):
+		out = "a guest removed the host"
+	r.kick(host, other.id)
+	if out == "" and r.slots.has(other):
+		out = "the host could not remove a player"
+	if out == "" and not r.is_banned(other):
+		out = "a removed player could come back"
+	net.free()
+	return out
