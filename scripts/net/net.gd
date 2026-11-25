@@ -18,6 +18,7 @@ signal pong_received(rtt_ms: int)
 signal error_received(message: String)
 signal steam_order(product: String, order_id: String, error: String)
 signal steam_owned(items: Array)
+signal steam_prices(prices: Dictionary)
 
 var role := "none"   # none, server, client
 
@@ -26,7 +27,8 @@ var rooms := {}            # code → CFRoom
 var slots_by_token := {}   # token → CFSlot
 var slots_by_peer := {}    # peer id → CFSlot
 var _housekeeping_t := 0.0
-var steam_shop: Node      # server only: Steam microtransactions
+var steam_shop: Node      # server only: Steam purchases
+var receipts: Node        # server only: Google Play / App Store purchase checks
 
 
 func _ready() -> void:
@@ -55,6 +57,8 @@ func start_server(port: int) -> void:
 	role = "server"
 	steam_shop = preload("res://scripts/net/steam_shop.gd").new()
 	add_child(steam_shop)
+	receipts = preload("res://scripts/net/receipts.gd").new()
+	add_child(receipts)
 	print("Last Ride Up server listening on UDP port %d" % port)
 	for ip in IP.get_local_addresses():
 		if ip.count(".") == 3 and not ip.begins_with("127."):
@@ -187,22 +191,49 @@ func c_look(animal: String, hat: String, face: String) -> void:
 		r.look_changed(s)
 
 
+func owned_changed(s: CFSlot) -> void:
+	## A purchase was checked: if the player is wearing it, everyone in the room now sees it.
+	var r: CFRoom = rooms.get(s.room_code)
+	if r:
+		r.broadcast_room()
+
+
 @rpc("any_peer", "call_remote", "reliable")
-func c_steam_buy(steamid: String, product: String) -> void:
-	if _sender_slot():
-		steam_shop.begin(multiplayer.get_remote_sender_id(), steamid, product)
+func c_proofs(proofs: Array) -> void:
+	var s := _sender_slot()
+	if s:
+		receipts.check(proofs, func(pid: String):
+			if not s.owned.has(pid):
+				s.owned[pid] = true
+				owned_changed(s))
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func c_steam_auth(ticket_hex: String) -> void:
+	var s := _sender_slot()
+	if s:
+		steam_shop.authenticate(s, ticket_hex)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func c_steam_buy(product: String) -> void:
+	var s := _sender_slot()
+	if s:
+		steam_shop.begin(s, product)
 
 
 @rpc("any_peer", "call_remote", "reliable")
 func c_steam_finalize(order_id: String) -> void:
-	if _sender_slot():
-		steam_shop.finish(multiplayer.get_remote_sender_id(), order_id)
+	var s := _sender_slot()
+	if s:
+		steam_shop.finish(s, order_id)
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func c_steam_owned(steamid: String) -> void:
-	if _sender_slot():
-		steam_shop.send_owned(multiplayer.get_remote_sender_id(), steamid)
+func c_steam_owned() -> void:
+	var s := _sender_slot()
+	if s:
+		steam_shop.send_owned(s)
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -345,9 +376,11 @@ func _on_server_gone() -> void:
 ## Convenience wrappers so client code never needs to know RPC details.
 func send_hello(pname: String, token: String) -> void: c_hello.rpc_id(1, pname, token)
 func send_look(animal: String, hat: String, face: String) -> void: c_look.rpc_id(1, animal, hat, face)
-func send_steam_buy(steamid: String, product: String) -> void: c_steam_buy.rpc_id(1, steamid, product)
+func send_proofs(proofs: Array) -> void: c_proofs.rpc_id(1, proofs)
+func send_steam_auth(ticket_hex: String) -> void: c_steam_auth.rpc_id(1, ticket_hex)
+func send_steam_buy(product: String) -> void: c_steam_buy.rpc_id(1, product)
 func send_steam_finalize(order_id: String) -> void: c_steam_finalize.rpc_id(1, order_id)
-func send_steam_owned(steamid: String) -> void: c_steam_owned.rpc_id(1, steamid)
+func send_steam_owned() -> void: c_steam_owned.rpc_id(1)
 func send_quick() -> void: c_quick.rpc_id(1)
 func send_create(is_private: bool) -> void: c_create.rpc_id(1, is_private)
 func send_join(code: String) -> void: c_join.rpc_id(1, code)
@@ -421,3 +454,8 @@ func s_steam_order(product: String, order_id: String, error: String) -> void:
 @rpc("authority", "call_remote", "reliable")
 func s_steam_owned(items: Array) -> void:
 	steam_owned.emit(items)
+
+
+@rpc("authority", "call_remote", "reliable")
+func s_steam_prices(prices: Dictionary) -> void:
+	steam_prices.emit(prices)

@@ -131,10 +131,16 @@ const FACE_NAMES := {"none": "Nothing", "glasses": "Glasses", "shades": "Sunglas
 
 
 ## Animals are always free. These hats/faces are free; the rest are one-off purchases.
-## HATS and FACES are append-only: an item's position is its Steam item id (see steam_item_id).
 const FREE_HATS := ["none", "explorer", "beanie"]
 const FREE_FACES := ["none", "glasses", "blush"]
-const PREMIUM_ITEMS := ["hat_crown", "hat_top_hat", "hat_viking", "hat_propeller"]   # 1.99; other paid items 0.99
+const PREMIUM_ITEMS := ["hat_crown", "hat_top_hat", "hat_viking", "hat_propeller"]   # tier 2 (US$1.99); others tier 1 (US$0.99)
+## Steam item ids, fixed for good once sold (never reuse or renumber one). Every paid item needs one.
+const STEAM_ITEM_IDS := {
+	"hat_top_hat": 102, "hat_crown": 103, "hat_party": 104, "hat_cowboy": 106, "hat_flower": 107, "hat_viking": 108,
+	"hat_propeller": 109, "hat_chef": 110,
+	"face_shades": 202, "face_monocle": 203, "face_eyepatch": 204, "face_mustache": 205,
+}
+const STEAM_IDENTITY := "lastrideup"   # GetAuthTicketForWebApi identity, checked by the server
 
 
 static func is_free(part: String, item: String) -> bool:
@@ -166,17 +172,19 @@ static func paid_products() -> Array:
 	return out
 
 
-static func price_cents(part: String, item: String) -> int:
+static func price_tier(part: String, item: String) -> int:
 	if is_free(part, item):
 		return 0
-	return 199 if PREMIUM_ITEMS.has(product_id(part, item)) else 99
+	return 2 if PREMIUM_ITEMS.has(product_id(part, item)) else 1
+
+
+static func price_cents(part: String, item: String) -> int:
+	## US dollar price; the stores (and steam_shop.gd for Steam) price other currencies by tier.
+	return [0, 99, 199][price_tier(part, item)]
 
 
 static func steam_item_id(pid: String) -> int:
-	var pi := item_of_product(pid)
-	if pi.is_empty():
-		return 0
-	return (100 + HATS.find(pi[1])) if pi[0] == "hat" else (200 + FACES.find(pi[1]))
+	return STEAM_ITEM_IDS.get(pid, 0)
 
 
 static func color_for_animal(animal: String) -> Color:

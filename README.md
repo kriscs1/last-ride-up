@@ -105,16 +105,24 @@ docs/decisions/          architecture decision records
 
 ## Selling cosmetics
 
-Free: every animal, the explorer's helmet and beanie, glasses and rosy cheeks. Every other hat and face is a one-off (non-consumable) purchase: $1.99 for the crown, top hat, horned helmet and propeller cap, $0.99 for the rest (`CF.price_cents`). The stores show their own localised price once they answer.
+Free: every animal, the explorer's helmet and beanie, glasses and rosy cheeks. Every other hat and face is a one-off (non-consumable) purchase. Tier 2 (US$1.99) covers the crown, top hat, horned helmet and propeller cap; tier 1 (US$0.99) covers the rest (`CF.price_tier`). Google and Apple show their own local price once they answer. On Steam the server prices each item in the player's wallet currency (`PRICES` in `scripts/net/steam_shop.gd`, which covers every currency Steam supports).
 
-Product ids are `hat_<item>` / `face_<item>`, e.g. `hat_crown`, `face_shades` (`CF.paid_products()` lists them all). Create the same ids in each store:
+Product ids are `hat_<item>` / `face_<item>`, e.g. `hat_crown`, `face_shades` (`CF.paid_products()` lists them all). Create the same ids in each store.
 
-- **Google Play:** install the [GodotGooglePlayBilling](https://github.com/godot-sdk-integrations/godot-google-play-billing) addon (`addons/GodotGooglePlayBilling/`), enable it and the Gradle build, and add each id as a one-time in-app product in Play Console. Purchases are acknowledged automatically; "Restore purchases" re-reads them from Play.
-- **App Store:** add the `InAppStore` plugin from [godot-ios-plugins](https://github.com/godot-sdk-integrations/godot-ios-plugins) to the iOS export and create each id as a non-consumable in App Store Connect. The Restore purchases button is the one Apple requires.
-- **Steam:** add GodotSteam and enable microtransactions for the app. The dedicated server holds the publisher key and runs InitTxn/FinalizeTxn, storing purchases in `user://steam_purchases.json`. Start it with `STEAM_PUBLISHER_KEY=… STEAM_APP_ID=… godot --headless --path . -- --server`, which uses the Steam sandbox until you also set `STEAM_SANDBOX=0`. Steam item ids are 100 + the hat's index and 200 + the face's index in `CF.HATS` / `CF.FACES`, so only ever append to those lists.
-- **Debug builds** with no store use a test store: purchases unlock at once and no money is taken. Release builds with no store let players try items on, but not buy them.
+**The server decides what others see.** A paid hat or face is only shown to the room after the dedicated server has checked the purchase, so a modified client can't show items it hasn't bought:
 
-Ownership is checked on the player's device. The server trusts the hat and face it is sent, and does not yet verify a Steam session ticket for the steamid. A modified client could therefore wear paid items, but that affects looks only.
+- **Google Play.** Install the [GodotGooglePlayBilling](https://github.com/godot-sdk-integrations/godot-google-play-billing) addon (`addons/GodotGooglePlayBilling/`), then enable it and the Gradle build. Add each id as a one-time in-app product in Play Console. The game acknowledges purchases itself, and "Restore purchases" re-reads them from Play. The server checks Google's signature on each purchase: set `GOOGLE_PLAY_PUBLIC_KEY` (Play Console → Monetization setup → Licensing) and `GOOGLE_PLAY_PACKAGE`.
+- **App Store.** Add the `InAppStore` plugin from [godot-ios-plugins](https://github.com/godot-sdk-integrations/godot-ios-plugins) to the iOS export, and create each id as a non-consumable in App Store Connect. The Restore purchases button is the one Apple requires. The server looks each transaction up with the App Store Server API. Set `APPLE_PRIVATE_KEY_PATH` (an In-App Purchase key `.p8`), `APPLE_KEY_ID`, `APPLE_ISSUER_ID` and `APPLE_BUNDLE_ID`. It tries production, then sandbox; override this with `APPLE_API_BASES`.
+- **Steam.** Add GodotSteam and enable microtransactions for the app. The client signs in to the server with a Steam Web API ticket (identity `lastrideup`), and the server confirms it with `AuthenticateUserTicket`. The server then reads the player's currency, runs InitTxn/FinalizeTxn with the publisher key, and records purchases in `user://steam_purchases.json`. Set `STEAM_PUBLISHER_KEY` and `STEAM_APP_ID`. It uses the Steam sandbox until you also set `STEAM_SANDBOX=0`. Steam item ids are fixed in `CF.STEAM_ITEM_IDS`: give each new paid item a new id, and never reuse or renumber one.
+- **Debug builds** with no store use a test store: purchases unlock at once and no money is taken. Other players only see test purchases on a server started with `--test-purchases`, so never use that flag on a public server. Release builds with no store let players try items on, but not buy them.
+
+Example server: `STEAM_PUBLISHER_KEY=… STEAM_APP_ID=… GOOGLE_PLAY_PUBLIC_KEY=… GOOGLE_PLAY_PACKAGE=… APPLE_PRIVATE_KEY_PATH=… APPLE_KEY_ID=… APPLE_ISSUER_ID=… APPLE_BUNDLE_ID=… godot --headless --path . -- --server`. Each store is switched off when its settings are missing.
+
+**Testing the server checks without real stores.** `tests/stores/mock_stores.py` (it needs Python's `cryptography` package) pretends to be the Steam and App Store APIs on port 8765, and it checks the server's Apple tokens with its own copy of the test key. `tests/stores/drive_stores.gd` then plays a client: Steam sign-in and buying, forged and genuine Google purchases, and App Store lookups. See the top of `drive_stores.gd` for the commands. `tests/fixtures/test_apple_key.p8` is a throwaway key made for these tests, not a real Apple key.
+
+**Still to check with real accounts:** each store plugin inside a real exported build, and Apple's live API hosts. The GodotSteam signal *arguments* (the names are confirmed) are read defensively, so they work with either buffer format.
+
+Store receipts are not tied to a game account. Someone who copies another player's Google purchase data or App Store transaction id could show those items too. Closing that gap needs player accounts.
 
 ## Exporting
 

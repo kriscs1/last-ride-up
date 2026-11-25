@@ -42,6 +42,11 @@ func _init() -> void:
 	_test("cosmetics: switching animal only in the lobby and only to a free one", _t_look_switch)
 	_test("shop: free and paid items, product ids and Steam item ids", _t_shop_catalogue)
 	_test("shop: buying, saving and a refund through the store record", _t_shop_owned)
+	_test("shop: other players only see paid items the server has checked", _t_shop_roster)
+	_test("shop: Steam prices exist for every live currency and follow Steam's steps", _t_steam_prices)
+	_test("shop: Google Play purchase signatures are checked", _t_play_signature)
+	_test("shop: App Store API token is a valid ES256 JWT, and transactions are read", _t_apple)
+	_test("shop: Steam ticket buffers become hex in either GodotSteam format", _t_steam_ticket)
 	print("\n%d passed, %d failed" % [_passes, _failures])
 	quit(1 if _failures > 0 else 0)
 
@@ -755,12 +760,12 @@ func _t_look_switch() -> String:
 		out = "could not switch to a free animal"
 	r.state = "playing"
 	b.animal = "bear"
-	b.hat = "crown"
+	b.hat = "beanie"
 	r.look_changed(b)
 	if out == "" and CF.animal_of(b.color) != "cat":
 		out = "animal changed during a match"
 	var entry: Dictionary = r.roster().filter(func(e): return e["id"] == "b")[0]
-	if out == "" and entry["hat"] != "crown":
+	if out == "" and entry["hat"] != "beanie":
 		out = "the roster does not carry the hat"
 	net.free()
 	return out
@@ -777,7 +782,7 @@ func _t_shop_catalogue() -> String:
 			return "product id does not round-trip: %s" % pid
 		if CF.price_cents(pi[0], pi[1]) not in [99, 199]:
 			return "odd price for %s" % pid
-		var sid := CF.steam_item_id(pid)
+		var sid: int = CF.steam_item_id(pid)
 		if sid <= 0 or steam_ids.has(sid):
 			return "Steam item id clash for %s" % pid
 		steam_ids[sid] = true
@@ -798,6 +803,8 @@ func _t_shop_owned() -> String:
 	store.buy("hat", "crown")
 	if out == "" and not store.owns("hat", "crown"):
 		out = "test purchase did not unlock"
+	if out == "" and store.proofs.get("hat_crown", {}).get("store") != "test":
+		out = "test purchase has no proof"
 	var again: Node = load("res://scripts/client/store.gd").new()
 	again.save_path = store.save_path
 	again.load_owned()
@@ -810,3 +817,124 @@ func _t_shop_owned() -> String:
 	store.free()
 	again.free()
 	return out
+
+
+func _t_shop_roster() -> String:
+	var net: Node = load("res://scripts/net/net.gd").new()
+	var r := CFRoom.new("TEST03", true, net)
+	var a := _room_slot(r, "a", "fox")
+	a.hat = "crown"
+	a.face = "glasses"
+	var out := ""
+	var e: Dictionary = r.roster()[0]
+	if e["hat"] != "none" or e["face"] != "glasses":
+		out = "unchecked crown shown (or free glasses hidden): %s" % str(e)
+	a.owned["hat_crown"] = true
+	e = r.roster()[0]
+	if out == "" and e["hat"] != "crown":
+		out = "checked crown not shown"
+	net.free()
+	return out
+
+
+func _t_steam_prices() -> String:
+	var shop: Script = load("res://scripts/net/steam_shop.gd")
+	var live := ["AED", "AUD", "BRL", "CAD", "CHF", "CLP", "CNY", "COP", "CRC", "EUR", "GBP", "HKD", "ILS", "IDR", "INR",
+		"JPY", "KRW", "KWD", "KZT", "MXN", "MYR", "NOK", "NZD", "PEN", "PHP", "PLN", "QAR", "RUB", "SAR", "SGD", "THB",
+		"TWD", "UAH", "USD", "UYU", "VND", "ZAR"]
+	for c in live:
+		var t1: int = shop.amount(c, 1)
+		var t2: int = shop.amount(c, 2)
+		if t1 <= 0 or t2 <= t1:
+			return "%s: bad prices %d / %d" % [c, t1, t2]
+		var step: int = shop.STEP.get(c, 1)
+		if t1 % step != 0 or t2 % step != 0:
+			return "%s: prices must be multiples of %d" % [c, step]
+	if shop.price_label("EUR", 99) != "€0.99" or shop.price_label("JPY", 15000) != "¥150" or shop.price_label("PLN", 449) != "zł 4.49":
+		return "price labels: %s %s %s" % [shop.price_label("EUR", 99), shop.price_label("JPY", 15000), shop.price_label("PLN", 449)]
+	if shop.amount("XXX", 1) != 0:
+		return "unknown currency priced"
+	return ""
+
+
+func _t_play_signature() -> String:
+	var rc: Script = load("res://scripts/net/receipts.gd")
+	var crypto := Crypto.new()
+	var priv := crypto.generate_rsa(2048)
+	var pub_pem := priv.save_to_string(true)
+	var b64 := ""
+	for line in pub_pem.split("\n"):
+		if not line.begins_with("-----"):
+			b64 += line.strip_edges()
+	var pub: CryptoKey = rc.public_key_from_base64(b64)   # as pasted from Play Console
+	if pub == null:
+		return "could not read a base64 public key"
+	var json := JSON.stringify({"orderId": "GPA.1", "packageName": "com.test.lru", "productId": "hat_crown", "purchaseState": 0})
+	var sig := Marshalls.raw_to_base64(crypto.sign(HashingContext.HASH_SHA1, json.sha1_buffer(), priv))
+	if rc.check_play(json, sig, pub, "com.test.lru") != "hat_crown":
+		return "a good purchase was rejected"
+	if rc.check_play(json.replace("hat_crown", "hat_chef"), sig, pub, "com.test.lru") != "":
+		return "an edited purchase was accepted"
+	if rc.check_play(json, sig, pub, "com.other.app") != "":
+		return "another app's purchase was accepted"
+	var pending := JSON.stringify({"packageName": "com.test.lru", "productId": "hat_crown", "purchaseState": 2})
+	var psig := Marshalls.raw_to_base64(crypto.sign(HashingContext.HASH_SHA1, pending.sha1_buffer(), priv))
+	if rc.check_play(pending, psig, pub, "com.test.lru") != "":
+		return "a pending purchase was accepted"
+	return ""
+
+
+func _t_apple() -> String:
+	var rc: Script = load("res://scripts/net/receipts.gd")
+	var key := CryptoKey.new()
+	if key.load("res://tests/fixtures/test_apple_key.p8") != OK:
+		return "could not load the test EC key"
+	var jwt: String = rc.es256_jwt(key, "KEY123", "issuer-1", "com.test.lru", 1700000000)
+	var parts := jwt.split(".")
+	if parts.size() != 3:
+		return "ES256 signing failed (empty or malformed JWT)"
+	var head = JSON.parse_string(rc.b64url_decode(parts[0]).get_string_from_utf8())
+	var claims = JSON.parse_string(rc.b64url_decode(parts[1]).get_string_from_utf8())
+	if head.get("alg") != "ES256" or head.get("kid") != "KEY123" or claims.get("aud") != "appstoreconnect-v1" \
+			or claims.get("bid") != "com.test.lru" or int(claims.get("exp")) - int(claims.get("iat")) != 300:
+		return "JWT contents wrong: %s %s" % [str(head), str(claims)]
+	var raw: PackedByteArray = rc.b64url_decode(parts[2])
+	if raw.size() != 64:
+		return "signature should be 64 bytes, got %d" % raw.size()
+	var pub := CryptoKey.new()
+	pub.load("res://tests/fixtures/test_apple_key.pub.pem", true)
+	if not Crypto.new().verify(HashingContext.HASH_SHA256, (parts[0] + "." + parts[1]).sha256_buffer(), _raw_to_der(raw), pub):
+		return "JWT signature does not verify"
+	var tx := func(d: Dictionary) -> Dictionary:
+		return {"signedTransactionInfo": "x." + rc.b64url_encode(JSON.stringify(d).to_utf8_buffer()) + ".y"}
+	if rc.apple_product_from(tx.call({"bundleId": "com.test.lru", "productId": "face_shades"}), "com.test.lru") != "face_shades":
+		return "a good transaction was rejected"
+	if rc.apple_product_from(tx.call({"bundleId": "com.test.lru", "productId": "face_shades", "revocationDate": 1}), "com.test.lru") != "":
+		return "a refunded transaction was accepted"
+	if rc.apple_product_from(tx.call({"bundleId": "com.other", "productId": "face_shades"}), "com.test.lru") != "":
+		return "another app's transaction was accepted"
+	return ""
+
+
+static func _raw_to_der(raw: PackedByteArray) -> PackedByteArray:
+	var body := PackedByteArray()
+	for half in [raw.slice(0, 32), raw.slice(32, 64)]:
+		var v: PackedByteArray = half
+		while v.size() > 1 and v[0] == 0:
+			v = v.slice(1)
+		if v[0] & 0x80:
+			v.insert(0, 0)
+		body.append_array(PackedByteArray([0x02, v.size()]))
+		body.append_array(v)
+	var out := PackedByteArray([0x30, body.size()])
+	out.append_array(body)
+	return out
+
+
+func _t_steam_ticket() -> String:
+	var st: Script = load("res://scripts/client/store.gd")
+	var a: String = st.ticket_hex([7, 1, 3, PackedByteArray([0xde, 0xad, 0xbe, 0xef])])
+	var b: String = st.ticket_hex([7, 1, 2, [1, 255, 9]])
+	if a != "deadbe" or b != "01ff":
+		return "got %s and %s" % [a, b]
+	return ""

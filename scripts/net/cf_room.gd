@@ -96,6 +96,12 @@ func _free_color(slot: CFSlot) -> Color:
 	return Color(CF.PLAYER_COLORS[0])
 
 
+static func shown(s: CFSlot, part: String) -> String:
+	## Paid items are only shown once the server has checked the purchase.
+	var item := s.hat if part == "hat" else s.face
+	return item if CF.is_free(part, item) or s.owned.has(CF.product_id(part, item)) else "none"
+
+
 func look_changed(slot: CFSlot) -> void:
 	## Hats and faces change straight away. The animal only changes in the lobby, and only to a free one.
 	if state == "lobby" and slot.animal != "" and not _color_taken(CF.color_for_animal(slot.animal), slot):
@@ -303,7 +309,7 @@ func roster() -> Array:
 	var r: Array = []
 	for s in slots:
 		r.append({"id": s.id, "name": s.name, "color": s.color.to_html(false), "connected": s.connected, "host": s.id == host_id,
-			"hat": s.hat, "face": s.face})
+			"hat": shown(s, "hat"), "face": shown(s, "face")})
 	return r
 
 

@@ -9,6 +9,9 @@ var color := Color.WHITE
 var animal := ""            # preferred animal ("" = any); the colour decides the actual one
 var hat := "none"
 var face := "none"
+var owned := {}             # paid product ids the server has checked for this player
+var steamid := ""           # set once a Steam Web API ticket checks out
+var steam_currency := ""
 var peer := 0               # 0 while disconnected
 var connected := true
 var last_seen := 0          # msec
