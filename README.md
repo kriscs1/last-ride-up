@@ -198,6 +198,40 @@ The server re-reads the file every 5 seconds, with no restart needed. Banned pla
 The Game Center check trusts the certificate because of the https download from Apple. It doesn't walk the certificate chain.
 
 
+## Backups
+
+The server keeps its records as files in its data folder:
+
+- `accounts.json`
+- `bans.txt`
+- `steam_purchases.json`
+- `reports.jsonl`
+
+On Linux the data folder is `~/.local/share/godot/app_userdata/Last Ride Up/`. On Windows it is `%APPDATA%\Godotpp_userdata\Last Ride Up\`. Losing `steam_purchases.json` loses players' Steam items, so back these files up.
+
+**Daily backup to Backblaze B2** (`scripts/net/backup.gd`). Once a day the server zips those files and uploads the zip to a B2 bucket as `last-ride-up/<date and time>Z.zip`. Each zip is encrypted at rest by B2 (SSE-B2). If the server was down at backup time, it backs up as soon as it's running again that day. A failed upload is retried every 30 minutes and logged as a warning.
+
+To set it up:
+
+1. In Backblaze, create a **private** bucket.
+2. Create an application key limited to that bucket, with `listBuckets` and `writeFiles`. Delete access isn't needed.
+3. Give the server these settings:
+
+   | Setting | Meaning |
+   |---|---|
+   | `B2_KEY_ID` | the application key's id |
+   | `B2_APPLICATION_KEY` | the application key |
+   | `B2_BUCKET` | the bucket's name |
+   | `B2_BACKUP_HOUR` | optional, the UTC hour to back up (default 3) |
+   | `B2_PREFIX` | optional folder in the bucket (default `last-ride-up/`) |
+
+4. To check it works, start the server once with `-- --server --backup-now`. The log should say `Backup uploaded to B2: …`.
+5. Add a lifecycle rule to the bucket to delete old backups, for example *"Keep only the last version"* with *days till hide* = 30 and *days till delete* = 1. The server never deletes anything.
+
+To restore, stop the server, unzip a backup into the data folder, and start it again.
+
+Tested against `tests/stores/mock_b2.py`, a stand-in for B2's API (`python tests/stores/mock_b2.py OUT_DIR`, then set `B2_API_BASE=http://127.0.0.1:8766`, key `testkey` / `testsecret`, bucket `lru-backups`). It has not yet been run against a real B2 account.
+
 ## Project layout
 
 ```text
@@ -206,7 +240,7 @@ scenes/main.tscn         entry scene → scripts/main.gd
 scripts/sim/             shared rules (no nodes, no network): CF config, CFSim, CFLevel, CFVeins, CFMaps, state classes
 scripts/sim/maps/        one file per map (ASCII layout, rooms with themes, props, sky theme)
 scripts/net/             Net autoload (all RPCs), CFRoom, CFSlot, CFWire, CFVoiceCodec,
-                         accounts.gd (sign-in, bans), steam_shop.gd / receipts.gd (purchase checks)
+                         accounts.gd (sign-in, bans), steam_shop.gd / receipts.gd (purchase checks), backup.gd (B2)
 scripts/client/          CFGameClient (prediction, interpolation), CFWorldView (drawing), CFUI, CFTouchControls, CFMapOverlay,
                          Account (sign-in), Store (purchases), Sfx (sound effects and music, synthesised at start-up),
                          CFVoice (microphone and playback), CFTalkUI (quick chat, Players & voice screen)

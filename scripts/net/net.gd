@@ -37,6 +37,7 @@ var _housekeeping_t := 0.0
 var steam_shop: Node      # server only: Steam purchases
 var receipts: Node        # server only: Google Play / App Store purchase checks
 var accounts: Node        # server only: player accounts and bans (accounts.gd)
+var backup: Node          # server only: daily backup of the record files to B2 (backup.gd)
 var refused_message := "" # client: the server turned us away (banned); don't reconnect
 
 
@@ -66,6 +67,8 @@ func start_server(port: int) -> void:
 	role = "server"
 	accounts = preload("res://scripts/net/accounts.gd").new()
 	add_child(accounts)
+	backup = preload("res://scripts/net/backup.gd").new()
+	add_child(backup)
 	steam_shop = preload("res://scripts/net/steam_shop.gd").new()
 	add_child(steam_shop)
 	receipts = preload("res://scripts/net/receipts.gd").new()
@@ -86,6 +89,7 @@ func _physics_process(delta: float) -> void:
 		_housekeeping_t = 0.0
 		_housekeeping()
 		accounts.poll(1.0)
+		backup.poll(1.0)
 
 
 func _housekeeping() -> void:

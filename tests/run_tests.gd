@@ -58,6 +58,7 @@ func _init() -> void:
 	_test("accounts: banned accounts are refused, and room removals follow the account", _t_accounts_bans)
 	_test("accounts: Game Center signatures are checked against the certificate's key", _t_game_center)
 	_test("accounts: a store receipt only counts for the account that sent it first", _t_receipt_claims)
+	_test("backup: due once a day from the backup hour, and the zip holds the record files", _t_backup)
 	print("\n%d passed, %d failed" % [_passes, _failures])
 	quit(1 if _failures > 0 else 0)
 
@@ -1389,4 +1390,48 @@ func _t_receipt_claims() -> String:
 	if out == "" and got != [test]:
 		out = "another account used copied receipts: %s" % str(got)
 	_accounts_done(v)
+	return out
+
+
+func _t_backup() -> String:
+	var b: Node = load("res://scripts/net/backup.gd").new()
+	b.key_id = "k"
+	b.app_key = "s"
+	b.bucket = "b"
+	b.hour = 3
+	b.dir = "user://test_backup"
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(b.dir))
+	var out := ""
+	var at := func(s: String) -> float: return Time.get_unix_time_from_datetime_string(s)
+	b.last_day = "2026-11-24"
+	if b.due(at.call("2026-11-25T02:59:00")):
+		out = "due before the backup hour"
+	if out == "" and not b.due(at.call("2026-11-25T03:00:00")):
+		out = "not due at the backup hour"
+	if out == "" and not b.due(at.call("2026-11-25T22:00:00")):
+		out = "a missed backup was not caught up later in the day"
+	b.last_day = "2026-11-25"
+	if out == "" and b.due(at.call("2026-11-25T23:00:00")):
+		out = "due twice in one day"
+	b.key_id = ""
+	if out == "" and b.due(at.call("2026-11-26T05:00:00")):
+		out = "due without B2 settings"
+	for f in ["accounts.json", "reports.jsonl"]:
+		var fh := FileAccess.open(b.dir.path_join(f), FileAccess.WRITE)
+		fh.store_string("{\"x\": \"%s\"}" % f)
+		fh.close()
+	var zip_path := "user://test_backup/out.zip"
+	var put: Array = b.make_zip(zip_path)
+	if out == "" and put != ["accounts.json", "reports.jsonl"]:
+		out = "zipped %s" % str(put)
+	var zr := ZIPReader.new()
+	if out == "" and (zr.open(zip_path) != OK or zr.read_file("accounts.json").get_string_from_utf8() != "{\"x\": \"accounts.json\"}"):
+		out = "the zip doesn't hold the file contents"
+	zr.close()
+	if out == "" and b.sha1_hex("abc".to_utf8_buffer()) != "a9993e364706816aba3e25717850c26c9cd0d89d":
+		out = "sha1"
+	for f in ["accounts.json", "reports.jsonl", "out.zip"]:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(b.dir.path_join(f)))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(b.dir))
+	b.free()
 	return out
