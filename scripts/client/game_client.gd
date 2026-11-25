@@ -242,8 +242,9 @@ func _on_match_started(d: Dictionary) -> void:
 	info = {}
 	had_bot = d["sabotage"]
 	world.mode = d.get("mode", "bot" if had_bot else "none")
+	var self_part: Array = d["snap"].get("me", {}).get("self", [])
 	for w in d["snap"]["ps"]:
-		_add_world_player(w)
+		_add_world_player(CFWire.with_self(w, self_part) if w[0] == my_id else w)
 	_on_snapshot(d["snap"])
 	if me:
 		_copy_for_draw(me, me_draw)
@@ -331,7 +332,8 @@ func _on_snapshot(s: Dictionary) -> void:
 			it.carriers = []
 	# players
 	var seen := {}
-	for w in s["ps"]:
+	for sw in s["ps"]:
+		var w: Array = CFWire.with_self(sw, info.get("self", [])) if sw[0] == my_id else sw
 		seen[w[0]] = true
 		if world.find_player(w[0]) == null:
 			_add_world_player(w)
@@ -343,7 +345,9 @@ func _on_snapshot(s: Dictionary) -> void:
 			if r["buf"].size() > 30:
 				r["buf"].pop_front()
 			var rp: CFPlayer = r["p"]
-			rp.stats = w[20]; rp.connected = w[18]; rp.aboard = w[15]; rp.carried = w[6]; rp.coop_item = w[16]
+			if not (w[20] as Dictionary).is_empty():
+				rp.stats = w[20]
+			rp.connected = w[18]; rp.aboard = w[15]; rp.carried = w[6]; rp.coop_item = w[16]
 	world.players = world.players.filter(func(p): return seen.has(p.id))
 	if me:
 		me.role = info.get("role", me.role)

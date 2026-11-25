@@ -84,7 +84,9 @@ func disconnect_slot(slot: CFSlot) -> void:
 				break
 	if connected_count() == 0:
 		empty_since = Time.get_ticks_msec()
-	broadcast_room()
+	# Deferred: when several players drop at once, the others' sockets are already closed but not yet
+	# handled, and sending to them fails. By the end of the frame every disconnect has been handled.
+	broadcast_room.call_deferred()
 
 
 func reconnect(slot: CFSlot, peer: int) -> void:
@@ -186,7 +188,7 @@ func send_start(slot: CFSlot) -> void:
 	for it in match_state.items:
 		items.append(CFWire.encode_item(it))
 	var snap := CFWire.encode_snapshot(match_state, tick, _acks(), true)
-	snap["me"] = CFWire.encode_private(match_state, slot.id)
+	snap["me"] = CFWire.encode_private(match_state, slot.id, _acks().get(slot.id, 0))
 	var d := {"seed": match_state.match_seed, "sabotage": match_state.director["enabled"], "players": match_state.players.size(), "map": match_state.map_id,
 		"mode": match_state.mode, "items": items, "snap": snap}
 	net.s_start.rpc_id(slot.peer, d)
@@ -232,14 +234,20 @@ func step() -> void:
 	var ended := match_state.phase == "won" or match_state.phase == "lost"
 	if tick % CF.SNAPSHOT_EVERY == 0 or ended:
 		# One shared snapshot, plus each player's private part (their role; Guile and allies for traitors).
-		var snap := CFWire.encode_snapshot(match_state, tick, _acks(), true)
-		var fn: Callable = net.s_snap_reliable if ended else net.s_snap
+		var acks := _acks()
+		var snap := CFWire.encode_snapshot(match_state, tick, acks, true)
+		# Unreliable snapshots are compressed once and shared; the final one goes reliably and uncompressed.
+		var packed := PackedByteArray() if ended else CFWire.pack_snapshot(snap)
 		for s in slots:
 			if s.peer == 0:
 				continue
-			var mine := snap.duplicate()
-			mine["me"] = CFWire.encode_private(match_state, s.id)
-			fn.rpc_id(s.peer, mine)
+			var mine := CFWire.encode_private(match_state, s.id, acks.get(s.id, 0))
+			if ended:
+				var full := snap.duplicate()
+				full["me"] = mine
+				net.s_snap_reliable.rpc_id(s.peer, full)
+			else:
+				net.s_snap.rpc_id(s.peer, packed, mine)
 	if ended:
 		print("room %s: match ended (%s) at %.1fs" % [code, match_state.phase, match_state.t])
 

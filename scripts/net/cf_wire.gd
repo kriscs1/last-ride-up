@@ -1,12 +1,15 @@
 class_name CFWire
-## Encoding of snapshots and items for the network. Godot serialises Arrays and Dictionaries
-## compactly; positions are rounded to 1/100 px to keep packets small.
+## Encoding of snapshots and items for the network. Positions are rounded to 1/64 px, and the
+## frequent unreliable snapshot is deflate-compressed so it fits in one UDP packet (see pack_snapshot).
 
 const PS_FIELDS := 28
+const SNAP_MAX_BYTES := 1 << 20   # refuse to inflate anything bigger than this
 
 
 static func r2(v: float) -> float:
-	return snappedf(v, 0.01)
+	## Snap to 1/64: as fine as 0.01 px, but exactly representable as a 32-bit float, so Godot sends
+	## 4 bytes instead of 8 and the low bits compress away.
+	return roundf(v * 64.0) / 64.0
 
 
 static func encode_item(it: CFItem) -> Array:
@@ -37,22 +40,45 @@ static func apply_item(m: CFMatch, w: Array) -> void:
 		it.from = Vector2(float(w[7]), float(w[8]))
 
 
-static func encode_player(p: CFPlayer, ack: int, ended := false) -> Array:
+static func encode_player(p: CFPlayer, ack: int, ended := false, shared := false) -> Array:
 	## [0 id, 1 x, 2 y, 3 vx, 4 vy, 5 facing, 6 carried, 7 recover_t, 8 dash_t, 9 on_ground, 10 ability_cd, 11 jump_buf,
 	##  12 coyote, 13 drop_t, 14 ride_id, 15 aboard, 16 coop_item, 17 cp, 18 connected, 19 ack, 20 stats,
 	##  21 climbing, 22 stun_t, 23 invuln_t, 24 rec_from, 25 rec_to, 26 exiled, 27 public role]
 	## The role is only filled in once it is public: the player was exiled, or the match is over.
+	## Stats are only shown on the end screen, so they are sent (non-empty) only once the match is over.
+	## shared: the copy everyone gets. The fields only needed to predict your own movement are blanked
+	## there and sent to the player alone in encode_private (see encode_self / with_self).
 	var public_role := p.role if (p.exiled or ended) else ""
+	if shared:
+		return [p.id, r2(p.x), r2(p.y), r2(p.vx), r2(p.vy), p.facing, p.carried, r2(p.recover_t), r2(p.dash_t), p.on_ground,
+			0.0, 0.0, 0.0, 0.0, p.ride_id, p.aboard, p.coop_item, p.cp, p.connected, 0, p.stats if ended else {},
+			p.climbing, r2(p.stun_t), r2(p.invuln_t), Vector2.ZERO, Vector2.ZERO, p.exiled, public_role]
 	return [p.id, r2(p.x), r2(p.y), r2(p.vx), r2(p.vy), p.facing, p.carried, r2(p.recover_t), r2(p.dash_t), p.on_ground,
-		r2(p.ability_cd), r2(p.jump_buf), r2(p.coyote), r2(p.drop_t), p.ride_id, p.aboard, p.coop_item, p.cp, p.connected, ack, p.stats,
+		r2(p.ability_cd), r2(p.jump_buf), r2(p.coyote), r2(p.drop_t), p.ride_id, p.aboard, p.coop_item, p.cp, p.connected, ack, p.stats if ended else {},
 		p.climbing, r2(p.stun_t), r2(p.invuln_t), p.rec_from, p.rec_to, p.exiled, public_role]
+
+
+static func encode_self(p: CFPlayer, ack: int) -> Array:
+	## The prediction-only fields left out of the shared copy: [ability_cd, jump_buf, coyote, drop_t, ack, rec_from, rec_to].
+	return [r2(p.ability_cd), r2(p.jump_buf), r2(p.coyote), r2(p.drop_t), ack, p.rec_from, p.rec_to]
+
+
+static func with_self(w: Array, s: Array) -> Array:
+	## The shared player record with this player's own prediction fields put back.
+	if s.size() < 7:
+		return w
+	var out := w.duplicate()
+	out[10] = s[0]; out[11] = s[1]; out[12] = s[2]; out[13] = s[3]; out[19] = s[4]; out[24] = s[5]; out[25] = s[6]
+	return out
 
 
 ## Copies authoritative fields onto a local player.
 static func apply_player(p: CFPlayer, w: Array) -> void:
 	p.x = w[1]; p.y = w[2]; p.vx = w[3]; p.vy = w[4]; p.facing = w[5]; p.carried = w[6]; p.recover_t = w[7]; p.dash_t = w[8]
 	p.on_ground = w[9]; p.ability_cd = w[10]; p.jump_buf = w[11]; p.coyote = w[12]; p.drop_t = w[13]; p.ride_id = w[14]
-	p.aboard = w[15]; p.coop_item = w[16]; p.cp = w[17]; p.connected = w[18]; p.stats = w[20]
+	p.aboard = w[15]; p.coop_item = w[16]; p.cp = w[17]; p.connected = w[18]
+	if not (w[20] as Dictionary).is_empty():
+		p.stats = w[20]
 	p.climbing = w[21]; p.stun_t = w[22]; p.invuln_t = w[23]; p.rec_from = w[24]; p.rec_to = w[25]
 	if w.size() >= PS_FIELDS:
 		p.exiled = w[26]
@@ -65,7 +91,7 @@ static func encode_snapshot(m: CFMatch, tick: int, acks: Dictionary, include_dir
 	var ended := m.phase == "won" or m.phase == "lost"
 	var ps: Array = []
 	for p in m.players:
-		ps.append(encode_player(p, acks.get(p.id, 0), ended))
+		ps.append(encode_player(p, 0, ended, true))
 	var mv: Array = []
 	for mvr in m.movers:
 		mv.append([r2(mvr.x), r2(mvr.y), mvr.dir, r2(mvr.paused), mvr.jammed])
@@ -95,6 +121,30 @@ static func encode_snapshot(m: CFMatch, tick: int, acks: Dictionary, include_dir
 	return s
 
 
+static func pack_snapshot(s: Dictionary) -> PackedByteArray:
+	## [4-byte uncompressed size][deflate data]. Compressed once per tick and shared by every player.
+	var raw := var_to_bytes(s)
+	var out := PackedByteArray()
+	out.resize(4)
+	out.encode_u32(0, raw.size())
+	out.append_array(raw.compress(FileAccess.COMPRESSION_DEFLATE))
+	return out
+
+
+static func unpack_snapshot(data: PackedByteArray) -> Dictionary:
+	## Returns {} for anything malformed rather than erroring.
+	if data.size() < 5:
+		return {}
+	var n := data.decode_u32(0)
+	if n == 0 or n > SNAP_MAX_BYTES:
+		return {}
+	var raw := data.slice(4).decompress(n, FileAccess.COMPRESSION_DEFLATE)
+	if raw.size() != n:
+		return {}
+	var v: Variant = bytes_to_var(raw)
+	return v if v is Dictionary else {}
+
+
 static func _public_mech(m: CFMatch) -> Dictionary:
 	## Everything but the taint cooldown, which would show explorers when a secret taint happened.
 	var out := m.mech.duplicate()
@@ -102,12 +152,12 @@ static func _public_mech(m: CFMatch) -> Dictionary:
 	return out
 
 
-static func encode_private(m: CFMatch, pid: String) -> Dictionary:
-	## What only this player may know: their own role and, for a traitor, Guile and fellow traitors.
+static func encode_private(m: CFMatch, pid: String, ack := 0) -> Dictionary:
+	## What only this player may know: their own role and prediction state and, for a traitor, Guile and fellow traitors.
 	var p := m.find_player(pid)
 	if p == null:
 		return {}
-	var d := {"role": p.role, "meetings": p.meetings_left}
+	var d := {"role": p.role, "meetings": p.meetings_left, "self": encode_self(p, ack)}
 	if p.role == "traitor":
 		d["guile"] = r2(p.guile)
 		d["lock"] = r2(p.sab_lock)

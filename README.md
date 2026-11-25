@@ -18,7 +18,7 @@ The host picks a map in the lobby, or **Random** for a different one each round.
 ![Shard Mines](docs/map_mines.png)
 ![Hollow Marsh](docs/map_marsh.png)
 
-> **Status:** runs in Godot 4.7.2. All 28 rule tests pass, the project imports with no script errors, and a client can connect to a dedicated server, start a match, move, gather Sunstone and open the map. Known issue: snapshots are larger than one network packet (about 3 KB with one player), so on lossy Wi-Fi more of them will be dropped. A more compact wire format is the next step.
+> **Status:** runs in Godot 4.7.2. All 30 rule tests pass, the project imports with no script errors, and 10 clients have played a match together on one dedicated server. Snapshots are deflate-compressed and stay under one UDP packet even with 10 players (about 1.2 KB, checked by a test).
 
 ## Requirements
 

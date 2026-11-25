@@ -339,7 +339,12 @@ func s_start(data: Dictionary) -> void:
 
 
 @rpc("authority", "call_remote", "unreliable_ordered", 1)
-func s_snap(snap: Dictionary) -> void:
+func s_snap(packed: PackedByteArray, mine: Dictionary) -> void:
+	## Shared snapshot (compressed) plus this player's private part.
+	var snap := CFWire.unpack_snapshot(packed)
+	if snap.is_empty():
+		return
+	snap["me"] = mine
 	snapshot_received.emit(snap)
 
 

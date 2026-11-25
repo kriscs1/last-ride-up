@@ -36,12 +36,16 @@ func _init() -> void:
 	_test("meeting: a tie exiles nobody", _t_meeting_tie)
 	_test("traitors: only explorers count towards boarding", _t_escape_traitor)
 	_test("the meeting bell stands on solid floor on every map", _t_bell_floor)
+	_test("packed snapshots round-trip and reject garbage", _t_snapshot_pack)
+	_test("a 10-player snapshot fits in one UDP packet on every map", _t_snapshot_size)
 	print("\n%d passed, %d failed" % [_passes, _failures])
 	quit(1 if _failures > 0 else 0)
 
 
 func _test(name: String, fn: Callable) -> void:
-	var err: String = fn.call()
+	var res: Variant = fn.call()
+	# A test that hits a script error returns null instead of a String: that is a failure too.
+	var err: String = res if res is String else "crashed (script error, see above)"
 	if err == "":
 		_passes += 1
 		print("ok   - " + name)
@@ -654,4 +658,54 @@ func _t_bell_floor() -> String:
 			return "%s: the bell is inside a wall" % id
 		if not m.is_solid(m.tile_at(tx, ty + 1)):
 			return "%s: the bell floats with nothing under it" % id
+	return ""
+
+
+func _busy_match(map_id: String, n: int) -> CFMatch:
+	## n players running, jumping and dashing in different patterns for 40 seconds.
+	var m := CFSim.create_match(11, false, n, map_id)
+	for i in n:
+		CFSim.add_player(m, "p%d" % i, "Explorer %d" % i, Color.WHITE)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 5
+	CFSim.assign_roles(m, rng)
+	_run(m, 2400, func(id, k, f):
+		var i := int(str(id).substr(1))
+		f.move_x = 1.0 if ((k + i * 37) / (50 + i * 9)) % 2 == 0 else -1.0
+		f.jump = (k + i * 13) % (35 + i) == 0
+		f.ability = (k + i * 7) % 300 == 0
+		f.act = k % 20 == i)
+	return m
+
+
+func _t_snapshot_pack() -> String:
+	var m := _busy_match("verdant", 4)
+	var s := CFWire.encode_snapshot(m, 123, {}, true)
+	var back := CFWire.unpack_snapshot(CFWire.pack_snapshot(s))
+	if var_to_bytes(back) != var_to_bytes(s):
+		return "unpacked snapshot differs from the original"
+	for junk in [PackedByteArray(), PackedByteArray([1, 2, 3, 4, 5, 6]), PackedByteArray([255, 255, 255, 255, 0, 0])]:
+		if not CFWire.unpack_snapshot(junk).is_empty():
+			return "garbage was accepted"
+	if not (s["ps"][0][20] as Dictionary).is_empty():
+		return "live snapshots should leave out player stats"
+	m.phase = "won"
+	if (CFWire.encode_snapshot(m, 124, {}, true)["ps"][0][20] as Dictionary).is_empty():
+		return "the final snapshot must carry player stats for the end screen"
+	return ""
+
+
+func _t_snapshot_size() -> String:
+	# ENet's MTU is 1392 bytes. Keep 100 bytes for the RPC header and some growth.
+	const BUDGET := 1292
+	for id in CFMaps.IDS:
+		var m := _busy_match(id, CF.MAX_PLAYERS)
+		var acks := {}
+		for p in m.players:
+			acks[p.id] = 2400
+		var packed := CFWire.pack_snapshot(CFWire.encode_snapshot(m, 2400, acks, true))
+		var mine := var_to_bytes(CFWire.encode_private(m, CFSim.traitors(m, true)[0].id)).size()
+		print("     %s: %d players, packed %d bytes + private %d" % [id, m.players.size(), packed.size(), mine])
+		if packed.size() + mine > BUDGET:
+			return "%s: %d + %d bytes is over the %d-byte budget" % [id, packed.size(), mine, BUDGET]
 	return ""
