@@ -47,6 +47,8 @@ var sab_lock := 0.0          # a traitor can't sabotage again until this match t
 var sab_count := 0           # server only, revealed at the end
 var exiled := false          # voted out at a meeting: out of play for the rest of the match
 var meetings_left := CF.MEETINGS_EACH
+var hat := "none"            # cosmetics: client-side only, taken from the room roster
+var face := "none"
 
 
 func busy() -> bool:

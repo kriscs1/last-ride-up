@@ -13,6 +13,7 @@ signal vote_requested(target: String)
 signal lobby_requested
 signal settings_changed
 signal map_requested
+signal look_changed
 
 const GOLD := Color("#f2c14e")
 const INK := Color("#fff6df")
@@ -89,7 +90,10 @@ var _end_stats: GridContainer
 var _end_players: GridContainer
 var _btn_slider: HSlider
 var _lefty: CheckBox
-var settings := {"button_scale": 1.0, "left_handed": false, "name": "", "address": "127.0.0.1"}
+var settings := {"button_scale": 1.0, "left_handed": false, "name": "", "address": "127.0.0.1", "animal": "fox", "hat": "none", "face": "none"}
+var _look_preview: LookPreview
+var _look_values := {}
+var _look_return := "menu"
 
 
 func _ready() -> void:
@@ -105,6 +109,7 @@ func _ready() -> void:
 	_build_pause()
 	_build_end()
 	_build_meeting()
+	_build_look()
 	_apply_settings()
 	show_screen("menu")
 
@@ -247,6 +252,7 @@ func _build_menu() -> void:
 	join.custom_minimum_size.x = 100
 	join.pressed.connect(_on_join)
 	code_edit.text_submitted.connect(func(_t): _on_join())
+	_button(box, "Customize explorer", false).pressed.connect(open_look)
 	status_label = _label(box, "", 13)
 	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	var note := _label(box, "Online prototype (Milestone 3). Start a server with: godot --headless --path . -- --server", 12, Color(INK, 0.7))
@@ -378,6 +384,7 @@ func _build_lobby() -> void:
 	box.add_child(row)
 	_lobby_start = _button(row, "Start expedition")
 	_lobby_start.pressed.connect(func(): start_requested.emit())
+	_button(row, "Customize", false).pressed.connect(open_look)
 	_button(row, "Leave", false).pressed.connect(func(): leave_requested.emit())
 
 
@@ -1013,6 +1020,12 @@ func _load_settings() -> void:
 	if cfg.load("user://settings.cfg") == OK:
 		for k in settings:
 			settings[k] = cfg.get_value("player", k, settings[k])
+	if not CF.ANIMALS.has(settings["animal"]):
+		settings["animal"] = "fox"
+	if not CF.HATS.has(settings["hat"]):
+		settings["hat"] = "none"
+	if not CF.FACES.has(settings["face"]):
+		settings["face"] = "none"
 
 
 func _save_settings() -> void:
@@ -1020,3 +1033,91 @@ func _save_settings() -> void:
 	for k in settings:
 		cfg.set_value("player", k, settings[k])
 	cfg.save("user://settings.cfg")
+
+
+# ---------------------------------------------------------------- customize (cosmetics)
+
+func _build_look() -> void:
+	var box := _screen("look")
+	var t := _label(box, "Your explorer", 30, GOLD, true)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_look_preview = LookPreview.new()
+	_look_preview.custom_minimum_size = Vector2(420, 230)
+	box.add_child(_look_preview)
+	for part in ["animal", "hat", "face"]:
+		var row := HBoxContainer.new()
+		row.alignment = BoxContainer.ALIGNMENT_CENTER
+		row.add_theme_constant_override("separation", 8)
+		box.add_child(row)
+		var what := _label(row, {"animal": "Animal", "hat": "Hat", "face": "Face"}[part], 14, Color(INK, 0.8))
+		what.custom_minimum_size = Vector2(64, 0)
+		var prev := _button(row, "<", false)
+		prev.custom_minimum_size = Vector2(52, 44)
+		prev.pressed.connect(_cycle_look.bind(part, -1))
+		var val := _label(row, "", 17)
+		val.custom_minimum_size = Vector2(190, 0)
+		val.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_look_values[part] = val
+		var next := _button(row, ">", false)
+		next.custom_minimum_size = Vector2(52, 44)
+		next.pressed.connect(_cycle_look.bind(part, 1))
+	var note := _label(box, "Everyone in your room sees your look. If someone already has your animal, you get a free one; you can switch in the lobby.", 12, Color(INK, 0.7))
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_button(box, "Done").pressed.connect(func(): show_screen(_look_return))
+	_refresh_look()
+
+
+func open_look() -> void:
+	var cur := current_screen()
+	_look_return = cur if cur != "" and cur != "look" else "menu"
+	_refresh_look()
+	show_screen("look")
+
+
+func _cycle_look(part: String, step: int) -> void:
+	var options: Array = {"animal": CF.ANIMALS, "hat": CF.HATS, "face": CF.FACES}[part]
+	settings[part] = options[posmod(options.find(settings[part]) + step, options.size())]
+	_save_settings()
+	_refresh_look()
+	look_changed.emit()
+
+
+func _refresh_look() -> void:
+	if _look_preview == null:
+		return
+	_look_values["animal"].text = str(settings["animal"]).capitalize()
+	_look_values["hat"].text = CF.HAT_NAMES[settings["hat"]]
+	_look_values["face"].text = CF.FACE_NAMES[settings["face"]]
+	_look_preview.set_look(settings["animal"], settings["hat"], settings["face"])
+
+
+## A big, animated preview of the player's explorer, drawn with the game's own character code.
+class LookPreview extends Control:
+	var view := CFWorldView.new()   # used only for its drawing code; never added to the tree
+	var p := CFPlayer.new()
+	var stage := Node2D.new()
+
+	func _ready() -> void:
+		p.on_ground = true
+		p.x = -p.w / 2
+		p.y = -p.h
+		stage.scale = Vector2(4, 4)
+		stage.draw.connect(func(): view._draw_player(stage, p, true))
+		add_child(stage)
+
+	func _exit_tree() -> void:
+		view.free()
+
+	func set_look(animal: String, hat: String, face: String) -> void:
+		p.color = CF.color_for_animal(animal)
+		p.hat = hat
+		p.face = face
+		stage.queue_redraw()
+
+	func _process(delta: float) -> void:
+		if not is_visible_in_tree():
+			return
+		view._now += delta
+		stage.position = Vector2(size.x / 2, size.y - 28)
+		stage.queue_redraw()

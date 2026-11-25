@@ -38,6 +38,8 @@ func _init() -> void:
 	_test("the meeting bell stands on solid floor on every map", _t_bell_floor)
 	_test("packed snapshots round-trip and reject garbage", _t_snapshot_pack)
 	_test("a 10-player snapshot fits in one UDP packet on every map", _t_snapshot_size)
+	_test("cosmetics: you get your animal if it is free, otherwise the next free one", _t_look_join)
+	_test("cosmetics: switching animal only in the lobby and only to a free one", _t_look_switch)
 	print("\n%d passed, %d failed" % [_passes, _failures])
 	quit(1 if _failures > 0 else 0)
 
@@ -709,3 +711,54 @@ func _t_snapshot_size() -> String:
 		if packed.size() + mine > BUDGET:
 			return "%s: %d + %d bytes is over the %d-byte budget" % [id, packed.size(), mine, BUDGET]
 	return ""
+
+
+func _room_slot(r: CFRoom, id: String, animal: String) -> CFSlot:
+	var s := CFSlot.new()
+	s.id = id
+	s.animal = animal
+	s.peer = 0   # no socket: nothing is sent
+	r.join(s)
+	return s
+
+
+func _t_look_join() -> String:
+	var net: Node = load("res://scripts/net/net.gd").new()
+	var r := CFRoom.new("TEST01", true, net)
+	var a := _room_slot(r, "a", "owl")
+	var b := _room_slot(r, "b", "owl")
+	var c := _room_slot(r, "c", "")
+	var out := ""
+	if CF.animal_of(a.color) != "owl":
+		out = "first owl got %s" % CF.animal_of(a.color)
+	elif CF.animal_of(b.color) == "owl" or CF.animal_of(c.color) == CF.animal_of(b.color):
+		out = "animals not unique: %s, %s, %s" % [CF.animal_of(a.color), CF.animal_of(b.color), CF.animal_of(c.color)]
+	net.free()
+	return out
+
+
+func _t_look_switch() -> String:
+	var net: Node = load("res://scripts/net/net.gd").new()
+	var r := CFRoom.new("TEST02", true, net)
+	var a := _room_slot(r, "a", "pig")
+	var b := _room_slot(r, "b", "frog")
+	var out := ""
+	b.animal = "pig"   # taken by a: stays a frog
+	r.look_changed(b)
+	if CF.animal_of(b.color) != "frog":
+		out = "switched to a taken animal"
+	b.animal = "cat"
+	r.look_changed(b)
+	if out == "" and CF.animal_of(b.color) != "cat":
+		out = "could not switch to a free animal"
+	r.state = "playing"
+	b.animal = "bear"
+	b.hat = "crown"
+	r.look_changed(b)
+	if out == "" and CF.animal_of(b.color) != "cat":
+		out = "animal changed during a match"
+	var entry: Dictionary = r.roster().filter(func(e): return e["id"] == "b")[0]
+	if out == "" and entry["hat"] != "crown":
+		out = "the roster does not carry the hat"
+	net.free()
+	return out

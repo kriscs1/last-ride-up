@@ -890,6 +890,8 @@ func _draw_player(n: Node2D, p: CFPlayer, is_me: bool) -> void:
 	n.draw_rect(Rect2(-6, -22, 14, 4), Color(p.color, alpha))
 	_tri(n, Vector2(-6, -21), Vector2(-13, -16 + sin(_now * 9) * 2), Vector2(-6, -18), Color(p.color, alpha))
 	_animal_head(n, kind, p.stun_t > 0.0, fur, belly, dark, alpha)
+	_draw_face_item(n, kind, p.face, alpha)
+	_draw_hat(n, kind, p.hat, alpha)
 	n.draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
 	if p.stun_t > 0.0:
 		for i in 3:
@@ -1045,6 +1047,103 @@ func _animal_head(n: Node2D, kind: String, stunned: bool, fur: Color, belly: Col
 		n.draw_circle(eye, 1.0, ink)
 	else:
 		n.draw_circle(eye, 1.8, ink)
+
+
+# ---------------------------------------------------------------- cosmetics
+# Anchors per animal: where the eye is, the tip of the nose, and the top of the head.
+
+const EYE_AT := {"frog": Vector2(9, -35)}
+const NOSE_AT := {"fox": Vector2(16, -26), "rabbit": Vector2(12, -27), "frog": Vector2(10, -24), "bear": Vector2(14, -27),
+	"cat": Vector2(13.5, -27), "panda": Vector2(14, -27), "raccoon": Vector2(16, -25), "owl": Vector2(12, -26),
+	"mouse": Vector2(17, -26), "pig": Vector2(13.5, -26)}
+const HEAD_TOP := {"frog": Vector2(4, -38.5)}
+
+
+func _dome(n: Node2D, c: Vector2, rx: float, ry: float, col: Color) -> void:
+	## The top half of an ellipse, flat side down.
+	var pts := PackedVector2Array()
+	for i in 13:
+		var a := PI + PI * i / 12.0
+		pts.append(c + Vector2(cos(a) * rx, sin(a) * ry))
+	n.draw_colored_polygon(pts, col)
+
+
+func _draw_hat(n: Node2D, kind: String, hat: String, alpha: float) -> void:
+	var a: Vector2 = HEAD_TOP.get(kind, Vector2(3, -36))
+	var c := func(hex: String) -> Color: return Color(hex, alpha)
+	match hat:
+		"explorer":
+			_dome(n, a + Vector2(0, 1), 9, 8, c.call("#d9c48a"))
+			n.draw_rect(Rect2(a + Vector2(-9, -1.5), Vector2(18, 2.5)), c.call("#7a5a32"))
+			_ell(n, a + Vector2(1, 1.5), 13, 2.5, c.call("#c9b27a"))
+		"top_hat":
+			_ell(n, a + Vector2(0, 1), 11, 2.5, c.call("#222228"))
+			n.draw_rect(Rect2(a + Vector2(-6, -14), Vector2(12, 15)), c.call("#2a2a30"))
+			n.draw_rect(Rect2(a + Vector2(-6, -4), Vector2(12, 3)), c.call("#b03a3a"))
+		"crown":
+			_poly(n, [a + Vector2(-7, 1), a + Vector2(-7, -8), a + Vector2(-3.5, -4), a + Vector2(0, -10), a + Vector2(3.5, -4),
+				a + Vector2(7, -8), a + Vector2(7, 1)], c.call("#f2c14e"))
+			n.draw_circle(a + Vector2(0, -2.5), 1.6, c.call("#d9483b"))
+		"party":
+			_tri(n, a + Vector2(-6, 1), a + Vector2(1, -16), a + Vector2(7, 1), c.call("#e0559a"))
+			n.draw_circle(a + Vector2(-0.5, -4), 1.2, c.call("#fff6df"))
+			n.draw_circle(a + Vector2(2.5, -9), 1.0, c.call("#fff6df"))
+			n.draw_circle(a + Vector2(1, -16), 2.5, c.call("#f2c14e"))
+		"beanie":
+			_dome(n, a + Vector2(0, 1), 9.5, 8, c.call("#3f6ed8"))
+			n.draw_rect(Rect2(a + Vector2(-9.5, -2), Vector2(19, 3.5)), c.call("#2f55b0"))
+			n.draw_circle(a + Vector2(0, -8), 2.8, c.call("#fff6df"))
+		"cowboy":
+			_dome(n, a + Vector2(0, 0), 7, 8, c.call("#a06a35"))
+			_ell(n, a + Vector2(0, 1), 14, 2.6, c.call("#8a5a2b"))
+			n.draw_rect(Rect2(a + Vector2(-7, -3), Vector2(14, 2)), c.call("#3b2216"))
+		"flower":
+			var f := a + Vector2(6, -1)
+			for i in 5:
+				n.draw_circle(f + Vector2(2.6, 0).rotated(i * TAU / 5), 2.2, c.call("#ff8fb1"))
+			n.draw_circle(f, 1.6, c.call("#f2c14e"))
+		"viking":
+			_tri(n, a + Vector2(-6, -1), a + Vector2(-13, -11), a + Vector2(-3, -5), c.call("#f1e6c8"))
+			_tri(n, a + Vector2(8, -1), a + Vector2(14, -11), a + Vector2(5, -5), c.call("#f1e6c8"))
+			_dome(n, a + Vector2(1, 1), 9.5, 7.5, c.call("#9aa3ad"))
+			n.draw_rect(Rect2(a + Vector2(-8.5, -1), Vector2(19, 2.5)), c.call("#6b7480"))
+		"propeller":
+			_dome(n, a + Vector2(0, 1), 9, 7, c.call("#e0a21a"))
+			_dome(n, a + Vector2(0, 1), 3, 7, c.call("#3f6ed8"))
+			n.draw_line(a + Vector2(0, -6), a + Vector2(0, -10), c.call("#333338"), 1.5)
+			_ell(n, a + Vector2(0, -10.5), absf(9.0 * cos(_now * 14.0)) + 0.8, 1.6, c.call("#d9483b"))
+			n.draw_circle(a + Vector2(0, -10.5), 1.4, c.call("#333338"))
+		"chef":
+			n.draw_rect(Rect2(a + Vector2(-7, -7), Vector2(14, 8)), c.call("#f6f4ef"))
+			n.draw_circle(a + Vector2(-4, -9), 5, c.call("#f6f4ef"))
+			n.draw_circle(a + Vector2(4, -9), 5, c.call("#f6f4ef"))
+			n.draw_circle(a + Vector2(0, -13), 5.5, c.call("#f6f4ef"))
+			n.draw_line(a + Vector2(-7, 0), a + Vector2(7, 0), c.call("#d6d2c8"), 1.0)
+
+
+func _draw_face_item(n: Node2D, kind: String, face: String, alpha: float) -> void:
+	var e: Vector2 = EYE_AT.get(kind, Vector2(7, -30))
+	var nose: Vector2 = NOSE_AT.get(kind, Vector2(14, -26))
+	var c := func(hex: String, a := 1.0) -> Color: return Color(hex, alpha * a)
+	match face:
+		"glasses":
+			n.draw_arc(e, 3.3, 0.0, TAU, 16, c.call("#2a2a30"), 1.3)
+			n.draw_line(e + Vector2(-3.3, 0), e + Vector2(-9, 1), c.call("#2a2a30"), 1.2)
+		"shades":
+			_ell(n, e + Vector2(0.5, 0), 4, 2.8, c.call("#15151a"))
+			n.draw_line(e + Vector2(-3.5, -0.5), e + Vector2(-9, 0.5), c.call("#15151a"), 1.2)
+			n.draw_line(e + Vector2(1.5, -1.5), e + Vector2(3, -0.5), c.call("#ffffff", 0.7), 0.8)
+		"monocle":
+			n.draw_arc(e, 3.5, 0.0, TAU, 16, c.call("#e0b040"), 1.3)
+			n.draw_line(e + Vector2(0, 3.5), e + Vector2(-2, 11), c.call("#e0b040"), 0.8)
+		"eyepatch":
+			n.draw_line(e + Vector2(-1, -3), e + Vector2(-10, -6), c.call("#15151a"), 1.2)
+			_ell(n, e, 3.2, 3, c.call("#15151a"))
+		"mustache":
+			_ell(n, nose + Vector2(-2.6, 2.8), 3.2, 1.4, c.call("#3a2a1e"), 0.35)
+			_ell(n, nose + Vector2(0.6, 2.8), 3.2, 1.4, c.call("#3a2a1e"), -0.35)
+		"blush":
+			_ell(n, e + Vector2(0.5, 5), 2.6, 1.5, c.call("#ff7a8a", 0.55))
 
 
 func _collect_glows() -> void:

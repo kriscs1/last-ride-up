@@ -41,14 +41,7 @@ func connected_count() -> int:
 
 func join(slot: CFSlot) -> void:
 	if not slots.has(slot):
-		var used := {}
-		for s in slots:
-			used[s.color.to_html(false)] = true
-		slot.color = Color(CF.PLAYER_COLORS[0])
-		for c in CF.PLAYER_COLORS:
-			if not used.has(Color(c).to_html(false)):
-				slot.color = Color(c)
-				break
+		slot.color = _free_color(slot)
 		slots.append(slot)
 	slot.room_code = code
 	if host_id == "" or not slots.any(func(s): return s.id == host_id and s.connected):
@@ -87,6 +80,27 @@ func disconnect_slot(slot: CFSlot) -> void:
 	# Deferred: when several players drop at once, the others' sockets are already closed but not yet
 	# handled, and sending to them fails. By the end of the frame every disconnect has been handled.
 	broadcast_room.call_deferred()
+
+
+func _color_taken(color: Color, by_other_than: CFSlot) -> bool:
+	return slots.any(func(s): return s != by_other_than and s.color.to_html(false) == color.to_html(false))
+
+
+func _free_color(slot: CFSlot) -> Color:
+	## The player's preferred animal if nobody else has it, otherwise the first free one.
+	if slot.animal != "" and not _color_taken(CF.color_for_animal(slot.animal), slot):
+		return CF.color_for_animal(slot.animal)
+	for c in CF.PLAYER_COLORS:
+		if not _color_taken(Color(c), slot):
+			return Color(c)
+	return Color(CF.PLAYER_COLORS[0])
+
+
+func look_changed(slot: CFSlot) -> void:
+	## Hats and faces change straight away. The animal only changes in the lobby, and only to a free one.
+	if state == "lobby" and slot.animal != "" and not _color_taken(CF.color_for_animal(slot.animal), slot):
+		slot.color = CF.color_for_animal(slot.animal)
+	broadcast_room()
 
 
 func reconnect(slot: CFSlot, peer: int) -> void:
@@ -288,7 +302,8 @@ func housekeeping() -> Array:
 func roster() -> Array:
 	var r: Array = []
 	for s in slots:
-		r.append({"id": s.id, "name": s.name, "color": s.color.to_html(false), "connected": s.connected, "host": s.id == host_id})
+		r.append({"id": s.id, "name": s.name, "color": s.color.to_html(false), "connected": s.connected, "host": s.id == host_id,
+			"hat": s.hat, "face": s.face})
 	return r
 
 

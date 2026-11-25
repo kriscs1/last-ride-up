@@ -121,6 +121,20 @@ const PLAYER_COLORS := ["#2f8f86", "#d9483b", "#3f6ed8", "#e0a21a", "#8a4fd6", "
 const ANIMALS := ["fox", "rabbit", "frog", "bear", "cat", "panda", "raccoon", "owl", "mouse", "pig"]
 
 
+## Cosmetics: purely visual, chosen in the Customize screen and shown to everyone in the room.
+const HATS := ["none", "explorer", "top_hat", "crown", "party", "beanie", "cowboy", "flower", "viking", "propeller", "chef"]
+const HAT_NAMES := {"none": "No hat", "explorer": "Explorer's helmet", "top_hat": "Top hat", "crown": "Crown", "party": "Party hat",
+	"beanie": "Beanie", "cowboy": "Cowboy hat", "flower": "Flower", "viking": "Horned helmet", "propeller": "Propeller cap", "chef": "Chef's hat"}
+const FACES := ["none", "glasses", "shades", "monocle", "eyepatch", "mustache", "blush"]
+const FACE_NAMES := {"none": "Nothing", "glasses": "Glasses", "shades": "Sunglasses", "monocle": "Monocle", "eyepatch": "Eyepatch",
+	"mustache": "Mustache", "blush": "Rosy cheeks"}
+
+
+static func color_for_animal(animal: String) -> Color:
+	var i := ANIMALS.find(animal)
+	return Color(PLAYER_COLORS[maxi(i, 0)])
+
+
 static func animal_of(color: Color) -> String:
 	var html := color.to_html(false)
 	for i in PLAYER_COLORS.size():

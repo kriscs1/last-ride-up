@@ -170,6 +170,19 @@ func c_hello(pname: String, token: String) -> void:
 
 
 @rpc("any_peer", "call_remote", "reliable")
+func c_look(animal: String, hat: String, face: String) -> void:
+	var s := _sender_slot()
+	if s == null:
+		return
+	s.animal = animal if CF.ANIMALS.has(animal) else ""
+	s.hat = hat if CF.HATS.has(hat) else "none"
+	s.face = face if CF.FACES.has(face) else "none"
+	var r: CFRoom = rooms.get(s.room_code)
+	if r:
+		r.look_changed(s)
+
+
+@rpc("any_peer", "call_remote", "reliable")
 func c_quick() -> void:
 	var s := _sender_slot()
 	if s == null:
@@ -308,6 +321,7 @@ func _on_server_gone() -> void:
 
 ## Convenience wrappers so client code never needs to know RPC details.
 func send_hello(pname: String, token: String) -> void: c_hello.rpc_id(1, pname, token)
+func send_look(animal: String, hat: String, face: String) -> void: c_look.rpc_id(1, animal, hat, face)
 func send_quick() -> void: c_quick.rpc_id(1)
 func send_create(is_private: bool) -> void: c_create.rpc_id(1, is_private)
 func send_join(code: String) -> void: c_join.rpc_id(1, code)

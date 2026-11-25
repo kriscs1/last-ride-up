@@ -53,6 +53,7 @@ func _ready() -> void:
 	ui.vote_requested.connect(func(target): Net.send_vote(target))
 	ui.lobby_requested.connect(_back_to_lobby)
 	ui.map_requested.connect(_on_map_requested)
+	ui.look_changed.connect(_send_look)
 	Net.connected_to_server.connect(_on_connected)
 	Net.connection_failed.connect(_on_connection_failed)
 	Net.disconnected.connect(_on_disconnected)
@@ -163,10 +164,16 @@ func _on_disconnected() -> void:
 		ui.set_status("Disconnected from the server.", true)
 
 
+func _send_look() -> void:
+	if Net.is_online() and my_id != "":
+		Net.send_look(ui.settings["animal"], ui.settings["hat"], ui.settings["face"])
+
+
 func _on_welcome(id: String, tok: String) -> void:
 	my_id = id
 	token = tok
 	ui.set_status("")
+	_send_look()   # before joining a room, so the preferred animal is free to be given
 	if pending_action.is_valid():
 		var a := pending_action
 		pending_action = Callable()
@@ -207,7 +214,10 @@ func _on_room(info: Dictionary) -> void:
 	ui.update_lobby(info, my_id)
 	if info["state"] == "lobby" and not end_shown:
 		_clear_world()
-		ui.show_screen("lobby")
+		if ui.current_screen() == "look":
+			ui._look_return = "lobby"   # stay in Customize; Done goes back to the lobby
+		else:
+			ui.show_screen("lobby")
 	elif info["state"] == "playing" and world == null and ui.current_screen() == "menu":
 		ui.show_screen("lobby")
 	if world:
@@ -216,6 +226,8 @@ func _on_room(info: Dictionary) -> void:
 				if r["id"] == p.id:
 					p.name = r["name"]
 					p.color = Color(r["color"])
+					p.hat = r.get("hat", "none")
+					p.face = r.get("face", "none")
 
 
 func _roster_entry(pid: String) -> Dictionary:
@@ -273,6 +285,8 @@ func _reveal_role() -> void:
 func _add_world_player(w: Array) -> CFPlayer:
 	var r := _roster_entry(w[0])
 	var p := CFSim.add_player(world, w[0], r.get("name", "Explorer"), Color(r.get("color", "#2f8f86")))
+	p.hat = r.get("hat", "none")
+	p.face = r.get("face", "none")
 	CFWire.apply_player(p, w)
 	if p.id == my_id:
 		me = p
@@ -538,6 +552,7 @@ func _interpolate_remotes() -> void:
 
 func _copy_for_draw(src: CFPlayer, dst: CFPlayer) -> void:
 	dst.id = src.id; dst.name = src.name; dst.color = src.color; dst.connected = src.connected
+	dst.hat = src.hat; dst.face = src.face
 	dst.copy_motion_from(src)
 	dst.carried = src.carried; dst.capacity = src.capacity; dst.aboard = src.aboard; dst.coop_item = src.coop_item
 	dst.w = src.w; dst.h = src.h

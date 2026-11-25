@@ -72,6 +72,7 @@ Button size and a left-handed layout are in the in-game menu.
 - **Camp bounties:** three shared goals on the board, for example "crack 2 veins in the Shard Mine", "crack a great vein together" or "bring the Heartstone home". Each one adds a bonus to the charge.
 - **Getting hurt:** spikes knock you back with a short stun and a moment of invulnerability. Falling into a pit glides you back out to your last safe ledge. Either way you spill some Sunstone where you can pick it up again.
 - **Map (M or the Map button):** shows the layout, you, the skyship, unopened shortcut levers, surging veins, bounty areas and active sabotage. It does **not** show other explorers.
+- **Explorers are animals.** Everyone in a room is a different one of ten (fox, rabbit, frog, bear, cat, panda, raccoon, owl, mouse, pig). **Customize** (menu or lobby) picks your preferred animal, one of ten hats and a face accessory. They are free, everyone sees them, and they are remembered. You get your animal if nobody in the room has it, otherwise the next free one.
 - Gather Sunstone. You can carry 100, and a fuller sack makes you slower and lower-jumping.
 - Load it into the skyship's furnace at camp. The required charge grows with the number of players.
 - **The Heartstone (150)** needs two players: one presses Lift and a second joins within 3 seconds. Carriers move slower and drop it if they split up.
