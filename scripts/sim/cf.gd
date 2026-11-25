@@ -117,6 +117,16 @@ const DEFAULT_PORT := 24680
 enum Tile { E, SOLID, PLANK, SPIKE, BRIDGE, TRAP, FAKE, LADDER, DOOR1, DOOR2, DOOR3 }
 
 const PLAYER_COLORS := ["#2f8f86", "#d9483b", "#3f6ed8", "#e0a21a", "#8a4fd6", "#2fae55", "#e0559a", "#1aa3c9", "#b5651d", "#6b7280"]
+## Each colour comes with its own animal. Colours are unique in a room, so animals are too.
+const ANIMALS := ["fox", "rabbit", "frog", "bear", "cat", "panda", "raccoon", "owl", "mouse", "pig"]
+
+
+static func animal_of(color: Color) -> String:
+	var html := color.to_html(false)
+	for i in PLAYER_COLORS.size():
+		if Color(PLAYER_COLORS[i]).to_html(false) == html:
+			return ANIMALS[i]
+	return "fox"
 
 
 static func target_share(players: int) -> float:

@@ -86,7 +86,7 @@ Button size and a left-handed layout are in the in-game menu.
 
 ## Networking in one paragraph
 
-The server is authoritative. Clients send only inputs (30 packets a second, unreliable, each repeating the last few frames so a lost packet costs nothing). The server steps the rules at 60 Hz and sends snapshots 20 times a second. Pickups, loads, sabotage, timers and wins are reliable events. Your own fox is predicted locally with the same `CFSim.step_movement` the server runs, then reconciled when snapshots arrive. Other players are drawn 100 ms in the past, interpolated between snapshots. If you drop out, your seat is held for 60 seconds and you rejoin the running match. See `docs/decisions/0002-networking.md`.
+The server is authoritative. Clients send only inputs (30 packets a second, unreliable, each repeating the last few frames so a lost packet costs nothing). The server steps the rules at 60 Hz and sends snapshots 20 times a second. Pickups, loads, sabotage, timers and wins are reliable events. Your own character is predicted locally with the same `CFSim.step_movement` the server runs, then reconciled when snapshots arrive. Other players are drawn 100 ms in the past, interpolated between snapshots. If you drop out, your seat is held for 60 seconds and you rejoin the running match. See `docs/decisions/0002-networking.md`.
 
 ## Project layout
 

@@ -401,6 +401,7 @@ func update_lobby(info: Dictionary, my_id: String) -> void:
 		hb.add_child(dot)
 		var nm := _label(hb, str(r["name"]) + (" (you)" if r["id"] == my_id else ""), 15)
 		nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_label(hb, CF.animal_of(Color(r["color"])).capitalize(), 12, Color(INK, 0.7))
 		if r["host"] or not r["connected"]:
 			_label(hb, "offline" if not r["connected"] else "host", 12, Color(INK, 0.7))
 		if r["host"]:

@@ -867,13 +867,14 @@ func _draw_player(n: Node2D, p: CFPlayer, is_me: bool) -> void:
 		bob = sin(p.y * 0.25) * 1.5
 	if p.recover_t <= 0.0:
 		_ell(n, Vector2(cx, by), 12, 3, Color(0, 0, 0, 0.25 * alpha))
-	var orange := Color("#e8762b", alpha)
-	var cream := Color("#fff1df", alpha)
-	var dark := Color("#3b2216", alpha)
+	var kind := CF.animal_of(p.color)
+	var pal: Array = ANIMAL_PALETTES[kind]
+	var fur := Color(pal[0], alpha)
+	var belly := Color(pal[1], alpha)
+	var dark := Color(pal[2], alpha)
 	n.draw_set_transform(Vector2(cx, by - bob), 0, s)
 	var wag := sin(_now * (14.0 if running else 4.0)) * 0.25
-	_ell(n, Vector2(-9, -12) + Vector2(-10, 0).rotated(-0.6 + wag), 13, 6, orange, -0.4 + wag)
-	_ell(n, Vector2(-9, -12) + Vector2(-20, 1).rotated(-0.6 + wag), 5, 4, cream)
+	_animal_tail(n, kind, wag, fur, belly, dark)
 	if p.carried > 0:
 		var r := 5 + 9 * float(p.carried) / p.capacity
 		_ell(n, Vector2(-8, -18 - r * 0.3), r, r * 0.9, Color("#8a5a34", alpha))
@@ -882,25 +883,168 @@ func _draw_player(n: Node2D, p: CFPlayer, is_me: bool) -> void:
 	var l1 := sin(ph) * 5 if running else (sin(p.y * 0.3) * 4 if p.climbing else 0.0)
 	n.draw_line(Vector2(-4, -8), Vector2(-4 + l1, -1), dark, 4.0)
 	n.draw_line(Vector2(4, -8), Vector2(4 - l1, -1), dark, 4.0)
-	_ell(n, Vector2(0, -14), 10, 9, orange)
-	_ell(n, Vector2(4, -12), 5, 6, cream)
+	_ell(n, Vector2(0, -14), 10, 9, fur)
+	_ell(n, Vector2(4, -12), 5, 6, belly)
+	if kind == "owl":
+		_ell(n, Vector2(-3, -15), 6, 7, dark, 0.3)   # folded wing
 	n.draw_rect(Rect2(-6, -22, 14, 4), Color(p.color, alpha))
 	_tri(n, Vector2(-6, -21), Vector2(-13, -16 + sin(_now * 9) * 2), Vector2(-6, -18), Color(p.color, alpha))
-	n.draw_circle(Vector2(3, -28), 9, orange)
-	_tri(n, Vector2(-3, -33), Vector2(-4, -44), Vector2(3, -36), orange)
-	_tri(n, Vector2(4, -35), Vector2(9, -45), Vector2(11, -33), orange)
-	_tri(n, Vector2(6, -28), Vector2(16, -26), Vector2(7, -22), cream)
-	if p.stun_t > 0.0:
-		n.draw_line(Vector2(5, -32), Vector2(9, -28), Color("#1b1210", alpha), 2.0)
-		n.draw_line(Vector2(9, -32), Vector2(5, -28), Color("#1b1210", alpha), 2.0)
-	else:
-		n.draw_circle(Vector2(7, -30), 1.8, Color("#1b1210", alpha))
-	n.draw_circle(Vector2(16, -26), 2, Color("#1b1210", alpha))
+	_animal_head(n, kind, p.stun_t > 0.0, fur, belly, dark, alpha)
 	n.draw_set_transform(Vector2.ZERO, 0, Vector2.ONE)
 	if p.stun_t > 0.0:
 		for i in 3:
 			var a := _now * 6 + i * TAU / 3
 			n.draw_circle(Vector2(cx + cos(a) * 12, p.y - 18 + sin(a) * 4), 2.5, C_GOLD)
+
+
+# ---------------------------------------------------------------- animals
+# Drawn facing right with the feet at (0, 0); _draw_player mirrors them for facing left.
+
+## fur, belly/muzzle, dark (legs, markings)
+const ANIMAL_PALETTES := {
+	"fox": ["#e8762b", "#fff1df", "#3b2216"],
+	"rabbit": ["#d8c8b4", "#fff8ee", "#8a7560"],
+	"frog": ["#5daa4a", "#d8eba0", "#2f6b2a"],
+	"bear": ["#8a5a3c", "#d9b48a", "#3e2618"],
+	"cat": ["#8d8f99", "#ece9e3", "#3a3b42"],
+	"panda": ["#f4f3ee", "#ffffff", "#24242a"],
+	"raccoon": ["#8a8c94", "#dcd8d0", "#2e2f35"],
+	"owl": ["#9a6b43", "#e8d2a8", "#5a3a22"],
+	"mouse": ["#b8aaa6", "#efe4e0", "#6d5f5b"],
+	"pig": ["#f2a7ae", "#ffd3d6", "#b0626c"],
+}
+
+
+func _animal_tail(n: Node2D, kind: String, wag: float, fur: Color, belly: Color, dark: Color) -> void:
+	var base := Vector2(-9, -12)
+	var dir := Vector2(-1, 0).rotated(-0.6 + wag)
+	match kind:
+		"fox":
+			_ell(n, base + dir * 10, 13, 6, fur, -0.4 + wag)
+			_ell(n, base + dir * 20 + Vector2(0, 1), 5, 4, belly)
+		"raccoon":
+			for i in 4:
+				_ell(n, base + dir * (5 + i * 5), 6.0 - i * 0.3, 5.0 - i * 0.3, dark if i % 2 == 1 else fur, -0.4 + wag)
+		"cat":
+			var pts := _bez(base, base + Vector2(-14, 2), base + Vector2(-12, -16 + wag * 10), 8)
+			n.draw_polyline(PackedVector2Array(pts), fur, 3.5)
+		"mouse":
+			var pts := _bez(base + Vector2(0, 2), base + Vector2(-14, 8), base + Vector2(-22, -2 + wag * 10), 8)
+			n.draw_polyline(PackedVector2Array(pts), Color("#e6a3a8", fur.a), 2.0)
+		"rabbit":
+			n.draw_circle(base + Vector2(-1, -1), 4.5, belly)
+		"bear":
+			n.draw_circle(base + Vector2(-1, -1), 3.5, fur)
+		"panda":
+			n.draw_circle(base + Vector2(-1, -1), 3.5, dark)
+		"owl":
+			_tri(n, base + Vector2(2, 2), base + Vector2(-9, 6 + wag * 6), base + Vector2(-7, -3), dark)
+		"pig":
+			n.draw_arc(base + Vector2(-3, -2), 3.0, 0.0, TAU * 0.8, 10, dark, 2.0)
+		_:
+			pass   # frogs have no tail
+
+
+func _animal_head(n: Node2D, kind: String, stunned: bool, fur: Color, belly: Color, dark: Color, alpha: float) -> void:
+	var ink := Color("#1b1210", alpha)
+	var pink := Color("#f0a0a8", alpha)
+	var white := Color(1, 1, 1, alpha)
+	var eye := Vector2(7, -30)
+	# ears, behind the head
+	match kind:
+		"fox":
+			_tri(n, Vector2(-3, -33), Vector2(-4, -44), Vector2(3, -36), fur)
+			_tri(n, Vector2(4, -35), Vector2(9, -45), Vector2(11, -33), fur)
+		"cat":
+			_tri(n, Vector2(-3, -33), Vector2(-3, -42), Vector2(3, -36), fur)
+			_tri(n, Vector2(5, -36), Vector2(10, -43), Vector2(11, -33), fur)
+			_tri(n, Vector2(6, -36), Vector2(9.5, -41), Vector2(10, -35), pink)
+		"rabbit":
+			_ell(n, Vector2(-1, -43), 3.2, 10, fur, -0.25)
+			_ell(n, Vector2(6, -44), 3.2, 10, fur, 0.15)
+			_ell(n, Vector2(6, -44), 1.6, 7, pink, 0.15)
+		"bear":
+			n.draw_circle(Vector2(-3, -35), 4, fur)
+			n.draw_circle(Vector2(8, -36), 4, fur)
+			n.draw_circle(Vector2(8, -36), 2, belly)
+		"panda":
+			n.draw_circle(Vector2(-3, -35), 4, dark)
+			n.draw_circle(Vector2(8, -36), 4, dark)
+		"raccoon":
+			_tri(n, Vector2(-4, -33), Vector2(-3, -41), Vector2(3, -36), fur)
+			_tri(n, Vector2(5, -36), Vector2(9, -42), Vector2(11, -34), fur)
+			_tri(n, Vector2(6, -36), Vector2(8.5, -40), Vector2(10, -35), dark)
+		"mouse":
+			n.draw_circle(Vector2(-4, -35), 6, fur)
+			n.draw_circle(Vector2(8, -37), 6, fur)
+			n.draw_circle(Vector2(8, -37), 3.5, pink)
+		"owl":
+			_tri(n, Vector2(-4, -33), Vector2(-6, -42), Vector2(1, -36), dark)
+			_tri(n, Vector2(6, -36), Vector2(11, -43), Vector2(11, -33), dark)
+		"pig":
+			_tri(n, Vector2(-3, -34), Vector2(-6, -41), Vector2(2, -37), fur)
+			_tri(n, Vector2(5, -36), Vector2(12, -40), Vector2(10, -32), fur)
+	# head
+	if kind == "frog":
+		_ell(n, Vector2(4, -27), 11, 8, fur)
+		n.draw_circle(Vector2(0, -34), 4.5, fur)
+		n.draw_circle(Vector2(8, -35), 4.5, fur)
+		n.draw_circle(Vector2(8, -35), 3, white)
+		eye = Vector2(9, -35)
+	else:
+		n.draw_circle(Vector2(3, -28), 9, fur)
+	# face
+	match kind:
+		"fox":
+			_tri(n, Vector2(6, -28), Vector2(16, -26), Vector2(7, -22), belly)
+			n.draw_circle(Vector2(16, -26), 2, ink)
+		"rabbit":
+			_ell(n, Vector2(9, -24), 4, 3, belly)
+			n.draw_circle(Vector2(12, -27), 1.5, pink)
+		"frog":
+			_ell(n, Vector2(5, -22), 6, 2.5, belly)
+			n.draw_line(Vector2(5, -24), Vector2(14, -25), dark, 1.5)
+		"bear":
+			_ell(n, Vector2(10, -25), 5, 4, belly)
+			n.draw_circle(Vector2(14, -27), 2, ink)
+		"cat":
+			_ell(n, Vector2(10, -25), 4, 3, belly)
+			_tri(n, Vector2(12, -28), Vector2(15, -28), Vector2(13.5, -26), pink)
+			for k in [-1.0, 1.0]:
+				n.draw_line(Vector2(13, -25), Vector2(20, -26 + k * 2.5), Color(ink, 0.6 * alpha), 1.0)
+		"panda":
+			_ell(n, Vector2(7, -29.5), 3.5, 4.5, dark, 0.3)
+			_ell(n, Vector2(10, -25), 4, 3, belly)
+			n.draw_circle(Vector2(14, -27), 1.8, ink)
+		"raccoon":
+			_ell(n, Vector2(6, -30), 8, 3.5, dark)
+			_tri(n, Vector2(6, -27), Vector2(16, -25), Vector2(7, -21), belly)
+			n.draw_circle(Vector2(16, -25), 2, ink)
+		"owl":
+			n.draw_circle(Vector2(6, -29), 6.5, belly)
+			n.draw_circle(eye, 3.2, Color("#f2c14e", alpha))
+			_tri(n, Vector2(10, -28), Vector2(14, -26), Vector2(10, -23), Color("#e08a2a", alpha))
+		"mouse":
+			_tri(n, Vector2(7, -28), Vector2(17, -26), Vector2(8, -22), fur)
+			n.draw_circle(Vector2(17, -26), 1.8, pink)
+			for k in [-1.0, 1.0]:
+				n.draw_line(Vector2(14, -25), Vector2(21, -25 + k * 2.5), Color(ink, 0.6 * alpha), 1.0)
+		"pig":
+			_ell(n, Vector2(13, -26), 3.5, 4.5, dark.lightened(0.35))
+			n.draw_circle(Vector2(13.5, -27.5), 0.9, ink)
+			n.draw_circle(Vector2(13.5, -24.5), 0.9, ink)
+	# eye: an X while stunned
+	if stunned:
+		var x_col := white if kind == "panda" or kind == "raccoon" else ink   # visible on the dark eye markings
+		n.draw_line(eye + Vector2(-2, -2), eye + Vector2(2, 2), x_col, 2.0)
+		n.draw_line(eye + Vector2(2, -2), eye + Vector2(-2, 2), x_col, 2.0)
+	elif kind == "panda":
+		n.draw_circle(eye, 1.4, white)
+	elif kind == "raccoon":
+		n.draw_circle(eye, 1.8, white)
+		n.draw_circle(eye, 1.0, ink)
+	else:
+		n.draw_circle(eye, 1.8, ink)
 
 
 func _collect_glows() -> void:
