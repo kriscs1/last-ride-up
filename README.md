@@ -72,7 +72,7 @@ Button size and a left-handed layout are in the in-game menu.
 - **Camp bounties:** three shared goals on the board, for example "crack 2 veins in the Shard Mine", "crack a great vein together" or "bring the Heartstone home". Each one adds a bonus to the charge.
 - **Getting hurt:** spikes knock you back with a short stun and a moment of invulnerability. Falling into a pit glides you back out to your last safe ledge. Either way you spill some Sunstone where you can pick it up again.
 - **Map (M or the Map button):** shows the layout, you, the skyship, unopened shortcut levers, surging veins, bounty areas and active sabotage. It does **not** show other explorers.
-- **Explorers are animals.** Everyone in a room is a different one of ten (fox, rabbit, frog, bear, cat, panda, raccoon, owl, mouse, pig). **Customize** (menu or lobby) picks your preferred animal, one of ten hats and a face accessory. They are free, everyone sees them, and they are remembered. You get your animal if nobody in the room has it, otherwise the next free one.
+- **Explorers are animals.** Everyone in a room is a different one of ten (fox, rabbit, frog, bear, cat, panda, raccoon, owl, mouse, pig). **Customize** (menu or lobby) picks your preferred animal, one of ten hats and a face accessory. Animals and a few hats and faces are free; the rest are one-off purchases you can try on first. Everyone sees them, and they are remembered. You get your animal if nobody in the room has it, otherwise the next free one.
 - Gather Sunstone. You can carry 100, and a fuller sack makes you slower and lower-jumping.
 - Load it into the skyship's furnace at camp. The required charge grows with the number of players.
 - **The Heartstone (150)** needs two players: one presses Lift and a second joins within 3 seconds. Carriers move slower and drop it if they split up.
@@ -102,6 +102,19 @@ tests/run_tests.gd       headless rule tests
 tools/                   lint_gd.py (static checks), build_maps.py / check_map.py / render_map_preview.py (maps)
 docs/decisions/          architecture decision records
 ```
+
+## Selling cosmetics
+
+Free: every animal, the explorer's helmet and beanie, glasses and rosy cheeks. Every other hat and face is a one-off (non-consumable) purchase: $1.99 for the crown, top hat, horned helmet and propeller cap, $0.99 for the rest (`CF.price_cents`). The stores show their own localised price once they answer.
+
+Product ids are `hat_<item>` / `face_<item>`, e.g. `hat_crown`, `face_shades` (`CF.paid_products()` lists them all). Create the same ids in each store:
+
+- **Google Play:** install the [GodotGooglePlayBilling](https://github.com/godot-sdk-integrations/godot-google-play-billing) addon (`addons/GodotGooglePlayBilling/`), enable it and the Gradle build, and add each id as a one-time in-app product in Play Console. Purchases are acknowledged automatically; "Restore purchases" re-reads them from Play.
+- **App Store:** add the `InAppStore` plugin from [godot-ios-plugins](https://github.com/godot-sdk-integrations/godot-ios-plugins) to the iOS export and create each id as a non-consumable in App Store Connect. The Restore purchases button is the one Apple requires.
+- **Steam:** add GodotSteam and enable microtransactions for the app. The dedicated server holds the publisher key and runs InitTxn/FinalizeTxn, storing purchases in `user://steam_purchases.json`. Start it with `STEAM_PUBLISHER_KEY=… STEAM_APP_ID=… godot --headless --path . -- --server`, which uses the Steam sandbox until you also set `STEAM_SANDBOX=0`. Steam item ids are 100 + the hat's index and 200 + the face's index in `CF.HATS` / `CF.FACES`, so only ever append to those lists.
+- **Debug builds** with no store use a test store: purchases unlock at once and no money is taken. Release builds with no store let players try items on, but not buy them.
+
+Ownership is checked on the player's device. The server trusts the hat and face it is sent, and does not yet verify a Steam session ticket for the steamid. A modified client could therefore wear paid items, but that affects looks only.
 
 ## Exporting
 

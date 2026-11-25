@@ -40,6 +40,8 @@ func _init() -> void:
 	_test("a 10-player snapshot fits in one UDP packet on every map", _t_snapshot_size)
 	_test("cosmetics: you get your animal if it is free, otherwise the next free one", _t_look_join)
 	_test("cosmetics: switching animal only in the lobby and only to a free one", _t_look_switch)
+	_test("shop: free and paid items, product ids and Steam item ids", _t_shop_catalogue)
+	_test("shop: buying, saving and a refund through the store record", _t_shop_owned)
 	print("\n%d passed, %d failed" % [_passes, _failures])
 	quit(1 if _failures > 0 else 0)
 
@@ -761,4 +763,50 @@ func _t_look_switch() -> String:
 	if out == "" and entry["hat"] != "crown":
 		out = "the roster does not carry the hat"
 	net.free()
+	return out
+
+
+func _t_shop_catalogue() -> String:
+	var paid := CF.paid_products()
+	if paid.size() != CF.HATS.size() + CF.FACES.size() - CF.FREE_HATS.size() - CF.FREE_FACES.size():
+		return "wrong number of paid items: %d" % paid.size()
+	var steam_ids := {}
+	for pid in paid:
+		var pi := CF.item_of_product(pid)
+		if pi.is_empty() or CF.product_id(pi[0], pi[1]) != pid:
+			return "product id does not round-trip: %s" % pid
+		if CF.price_cents(pi[0], pi[1]) not in [99, 199]:
+			return "odd price for %s" % pid
+		var sid := CF.steam_item_id(pid)
+		if sid <= 0 or steam_ids.has(sid):
+			return "Steam item id clash for %s" % pid
+		steam_ids[sid] = true
+	if not CF.item_of_product("hat_explorer").is_empty() or not CF.item_of_product("hat_nonsense").is_empty():
+		return "free or unknown items count as products"
+	if not CF.is_free("animal", "pig") or CF.price_cents("hat", "beanie") != 0:
+		return "animals and free hats must cost nothing"
+	return ""
+
+
+func _t_shop_owned() -> String:
+	var store: Node = load("res://scripts/client/store.gd").new()
+	store.save_path = "user://test_purchases.cfg"
+	store.backend = "test"
+	var out := ""
+	if not store.owns("hat", "explorer") or store.owns("hat", "crown"):
+		out = "fresh store owns the wrong things"
+	store.buy("hat", "crown")
+	if out == "" and not store.owns("hat", "crown"):
+		out = "test purchase did not unlock"
+	var again: Node = load("res://scripts/client/store.gd").new()
+	again.save_path = store.save_path
+	again.load_owned()
+	if out == "" and not again.owns("hat", "crown"):
+		out = "purchase not saved"
+	again.replace_owned(["face_shades", "hat_explorer", "junk"])
+	if out == "" and (again.owns("hat", "crown") or not again.owns("face", "shades") or again.owned.size() != 1):
+		out = "store record did not replace the owned list: %s" % str(again.owned.keys())
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(store.save_path))
+	store.free()
+	again.free()
 	return out

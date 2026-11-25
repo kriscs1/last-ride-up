@@ -130,6 +130,55 @@ const FACE_NAMES := {"none": "Nothing", "glasses": "Glasses", "shades": "Sunglas
 	"mustache": "Mustache", "blush": "Rosy cheeks"}
 
 
+## Animals are always free. These hats/faces are free; the rest are one-off purchases.
+## HATS and FACES are append-only: an item's position is its Steam item id (see steam_item_id).
+const FREE_HATS := ["none", "explorer", "beanie"]
+const FREE_FACES := ["none", "glasses", "blush"]
+const PREMIUM_ITEMS := ["hat_crown", "hat_top_hat", "hat_viking", "hat_propeller"]   # 1.99; other paid items 0.99
+
+
+static func is_free(part: String, item: String) -> bool:
+	return (FREE_HATS if part == "hat" else FREE_FACES).has(item) or part == "animal"
+
+
+static func product_id(part: String, item: String) -> String:
+	return "%s_%s" % [part, item]
+
+
+static func item_of_product(pid: String) -> Array:
+	## "hat_top_hat" → ["hat", "top_hat"]; [] if it is not a paid item.
+	for part in ["hat", "face"]:
+		if pid.begins_with(part + "_"):
+			var item := pid.substr(part.length() + 1)
+			if (HATS if part == "hat" else FACES).has(item) and not is_free(part, item):
+				return [part, item]
+	return []
+
+
+static func paid_products() -> Array:
+	var out := []
+	for h in HATS:
+		if not is_free("hat", h):
+			out.append(product_id("hat", h))
+	for f in FACES:
+		if not is_free("face", f):
+			out.append(product_id("face", f))
+	return out
+
+
+static func price_cents(part: String, item: String) -> int:
+	if is_free(part, item):
+		return 0
+	return 199 if PREMIUM_ITEMS.has(product_id(part, item)) else 99
+
+
+static func steam_item_id(pid: String) -> int:
+	var pi := item_of_product(pid)
+	if pi.is_empty():
+		return 0
+	return (100 + HATS.find(pi[1])) if pi[0] == "hat" else (200 + FACES.find(pi[1]))
+
+
 static func color_for_animal(animal: String) -> Color:
 	var i := ANIMALS.find(animal)
 	return Color(PLAYER_COLORS[maxi(i, 0)])

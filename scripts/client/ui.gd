@@ -93,6 +93,9 @@ var _lefty: CheckBox
 var settings := {"button_scale": 1.0, "left_handed": false, "name": "", "address": "127.0.0.1", "animal": "fox", "hat": "none", "face": "none"}
 var _look_preview: LookPreview
 var _look_values := {}
+var _look_try := {"hat": "none", "face": "none"}   # shown in the preview; may be a locked item
+var _buy_buttons := {}
+var _shop_status: Label
 var _look_return := "menu"
 
 
@@ -1022,9 +1025,9 @@ func _load_settings() -> void:
 			settings[k] = cfg.get_value("player", k, settings[k])
 	if not CF.ANIMALS.has(settings["animal"]):
 		settings["animal"] = "fox"
-	if not CF.HATS.has(settings["hat"]):
+	if not CF.HATS.has(settings["hat"]) or not Store.owns("hat", settings["hat"]):
 		settings["hat"] = "none"
-	if not CF.FACES.has(settings["face"]):
+	if not CF.FACES.has(settings["face"]) or not Store.owns("face", settings["face"]):
 		settings["face"] = "none"
 
 
@@ -1061,35 +1064,83 @@ func _build_look() -> void:
 		var next := _button(row, ">", false)
 		next.custom_minimum_size = Vector2(52, 44)
 		next.pressed.connect(_cycle_look.bind(part, 1))
-	var note := _label(box, "Everyone in your room sees your look. If someone already has your animal, you get a free one; you can switch in the lobby.", 12, Color(INK, 0.7))
+		var buy := _button(row, "", true)
+		buy.custom_minimum_size = Vector2(118, 44)
+		if part == "animal":
+			buy.modulate.a = 0.0
+			buy.disabled = true
+		else:
+			buy.pressed.connect(func(): Store.buy(part, _look_try[part]))
+			_buy_buttons[part] = buy
+	_shop_status = _label(box, "", 13, GOLD)
+	_shop_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	var note := _label(box, "All animals and a few hats and faces are free. Try anything on; others are one-off purchases. Everyone in your room sees your look.", 12, Color(INK, 0.7))
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_button(box, "Done").pressed.connect(func(): show_screen(_look_return))
+	var bottom := HBoxContainer.new()
+	bottom.alignment = BoxContainer.ALIGNMENT_CENTER
+	bottom.add_theme_constant_override("separation", 10)
+	box.add_child(bottom)
+	_button(bottom, "Restore purchases", false).pressed.connect(func(): Store.restore())
+	var done := _button(bottom, "Done")
+	done.custom_minimum_size.x = 200
+	done.pressed.connect(func(): show_screen(_look_return))
+	Store.owned_changed.connect(_on_owned_changed)
+	Store.message.connect(func(t: String): _shop_status.text = t)
 	_refresh_look()
 
 
 func open_look() -> void:
 	var cur := current_screen()
 	_look_return = cur if cur != "" and cur != "look" else "menu"
+	_look_try = {"hat": settings["hat"], "face": settings["face"]}
+	_shop_status.text = ""
 	_refresh_look()
 	show_screen("look")
 
 
 func _cycle_look(part: String, step: int) -> void:
 	var options: Array = {"animal": CF.ANIMALS, "hat": CF.HATS, "face": CF.FACES}[part]
-	settings[part] = options[posmod(options.find(settings[part]) + step, options.size())]
-	_save_settings()
+	var cur: String = settings[part] if part == "animal" else _look_try[part]
+	var nxt: String = options[posmod(options.find(cur) + step, options.size())]
+	if part != "animal":
+		_look_try[part] = nxt
+	if Store.owns(part, nxt):   # owned items are worn straight away; locked ones are only tried on
+		_equip(part, nxt)
 	_refresh_look()
+
+
+func _equip(part: String, item: String) -> void:
+	if settings[part] == item:
+		return
+	settings[part] = item
+	_save_settings()
 	look_changed.emit()
+
+
+func _on_owned_changed() -> void:
+	for part in ["hat", "face"]:
+		if not Store.owns(part, settings[part]):     # refunded
+			_equip(part, "none")
+		if current_screen() == "look" and Store.owns(part, _look_try[part]):   # just bought what's on
+			_equip(part, _look_try[part])
+	_refresh_look()
 
 
 func _refresh_look() -> void:
 	if _look_preview == null:
 		return
 	_look_values["animal"].text = str(settings["animal"]).capitalize()
-	_look_values["hat"].text = CF.HAT_NAMES[settings["hat"]]
-	_look_values["face"].text = CF.FACE_NAMES[settings["face"]]
-	_look_preview.set_look(settings["animal"], settings["hat"], settings["face"])
+	for part in ["hat", "face"]:
+		var item: String = _look_try[part]
+		var owned := Store.owns(part, item)
+		_look_values[part].text = (CF.HAT_NAMES if part == "hat" else CF.FACE_NAMES)[item] + ("" if owned else "  (locked)")
+		_look_values[part].modulate = Color.WHITE if owned else Color(1, 1, 1, 0.6)
+		var b: Button = _buy_buttons[part]
+		b.text = "Buy " + Store.price_text(part, item)
+		b.modulate.a = 0.0 if owned else 1.0
+		b.disabled = owned
+	_look_preview.set_look(settings["animal"], _look_try["hat"], _look_try["face"])
 
 
 ## A big, animated preview of the player's explorer, drawn with the game's own character code.

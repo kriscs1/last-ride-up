@@ -16,6 +16,8 @@ signal items_changed(items: Array)
 signal events_received(events: Array)
 signal pong_received(rtt_ms: int)
 signal error_received(message: String)
+signal steam_order(product: String, order_id: String, error: String)
+signal steam_owned(items: Array)
 
 var role := "none"   # none, server, client
 
@@ -24,6 +26,7 @@ var rooms := {}            # code → CFRoom
 var slots_by_token := {}   # token → CFSlot
 var slots_by_peer := {}    # peer id → CFSlot
 var _housekeeping_t := 0.0
+var steam_shop: Node      # server only: Steam microtransactions
 
 
 func _ready() -> void:
@@ -50,6 +53,8 @@ func start_server(port: int) -> void:
 	(multiplayer as SceneMultiplayer).server_relay = false
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	role = "server"
+	steam_shop = preload("res://scripts/net/steam_shop.gd").new()
+	add_child(steam_shop)
 	print("Last Ride Up server listening on UDP port %d" % port)
 	for ip in IP.get_local_addresses():
 		if ip.count(".") == 3 and not ip.begins_with("127."):
@@ -180,6 +185,24 @@ func c_look(animal: String, hat: String, face: String) -> void:
 	var r: CFRoom = rooms.get(s.room_code)
 	if r:
 		r.look_changed(s)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func c_steam_buy(steamid: String, product: String) -> void:
+	if _sender_slot():
+		steam_shop.begin(multiplayer.get_remote_sender_id(), steamid, product)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func c_steam_finalize(order_id: String) -> void:
+	if _sender_slot():
+		steam_shop.finish(multiplayer.get_remote_sender_id(), order_id)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func c_steam_owned(steamid: String) -> void:
+	if _sender_slot():
+		steam_shop.send_owned(multiplayer.get_remote_sender_id(), steamid)
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -322,6 +345,9 @@ func _on_server_gone() -> void:
 ## Convenience wrappers so client code never needs to know RPC details.
 func send_hello(pname: String, token: String) -> void: c_hello.rpc_id(1, pname, token)
 func send_look(animal: String, hat: String, face: String) -> void: c_look.rpc_id(1, animal, hat, face)
+func send_steam_buy(steamid: String, product: String) -> void: c_steam_buy.rpc_id(1, steamid, product)
+func send_steam_finalize(order_id: String) -> void: c_steam_finalize.rpc_id(1, order_id)
+func send_steam_owned(steamid: String) -> void: c_steam_owned.rpc_id(1, steamid)
 func send_quick() -> void: c_quick.rpc_id(1)
 func send_create(is_private: bool) -> void: c_create.rpc_id(1, is_private)
 func send_join(code: String) -> void: c_join.rpc_id(1, code)
@@ -385,3 +411,13 @@ func s_pong(client_ms: int) -> void:
 @rpc("authority", "call_remote", "reliable")
 func s_error(message: String) -> void:
 	error_received.emit(message)
+
+
+@rpc("authority", "call_remote", "reliable")
+func s_steam_order(product: String, order_id: String, error: String) -> void:
+	steam_order.emit(product, order_id, error)
+
+
+@rpc("authority", "call_remote", "reliable")
+func s_steam_owned(items: Array) -> void:
+	steam_owned.emit(items)
