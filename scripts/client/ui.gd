@@ -44,6 +44,7 @@ var _screens := {}
 var _hud: Control
 var _lobby_code: Label
 var _lobby_roster: GridContainer
+var _lobby_slots: Array = []   # one fixed cell per seat: {cell, dot, name, animal, tag}
 var _mode_buttons := {}
 var _mode_choice := "none"
 var _mode_blurb: Label
@@ -335,10 +336,27 @@ func _build_lobby() -> void:
 	_lobby_code = _label(box, "------", 44, GOLD, true)
 	_lobby_code.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_lobby_roster = GridContainer.new()
-	_lobby_roster.columns = 2
+	_lobby_roster.columns = 3
+	_lobby_roster.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	_lobby_roster.add_theme_constant_override("h_separation", 8)
 	_lobby_roster.add_theme_constant_override("v_separation", 6)
 	box.add_child(_lobby_roster)
+	# Every seat exists from the start, so players joining never change the page's size.
+	for i in CF.MAX_PLAYERS:
+		var cell := _panel(_lobby_roster)
+		cell.custom_minimum_size = Vector2(200, 0)
+		var hb := HBoxContainer.new()
+		cell.add_child(hb)
+		var dot := ColorRect.new()
+		dot.custom_minimum_size = Vector2(14, 14)
+		dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		hb.add_child(dot)
+		var nm := _label(hb, "", 15)
+		nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		nm.clip_text = true
+		var animal := _label(hb, "", 12, Color(INK, 0.7))
+		var tag := _label(hb, "", 12, Color(INK, 0.7))
+		_lobby_slots.append({"cell": cell, "dot": dot, "name": nm, "animal": animal, "tag": tag})
 	# map choice
 	var map_lbl := _label(box, "Map", 13, Color(INK, 0.8))
 	map_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -354,7 +372,7 @@ func _build_lobby() -> void:
 		b.pressed.connect(_on_map_picked.bind(id))
 		_map_buttons[id] = b
 	_map_thumb = TextureRect.new()
-	_map_thumb.custom_minimum_size = Vector2(420, 180)
+	_map_thumb.custom_minimum_size = Vector2(420, 140)
 	_map_thumb.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_map_thumb.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	_map_thumb.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
@@ -393,27 +411,25 @@ func _build_lobby() -> void:
 
 func update_lobby(info: Dictionary, my_id: String) -> void:
 	_lobby_code.text = info["code"]
-	for c in _lobby_roster.get_children():
-		c.queue_free()
 	var host_name := "the host"
 	var is_host := false
 	var online := 0
-	for r in info["roster"]:
-		var cell := _panel(_lobby_roster)
-		cell.custom_minimum_size = Vector2(200, 0)
-		cell.modulate.a = 1.0 if r["connected"] else 0.45
-		var hb := HBoxContainer.new()
-		cell.add_child(hb)
-		var dot := ColorRect.new()
-		dot.color = Color(r["color"])
-		dot.custom_minimum_size = Vector2(14, 14)
-		dot.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		hb.add_child(dot)
-		var nm := _label(hb, str(r["name"]) + (" (you)" if r["id"] == my_id else ""), 15)
-		nm.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_label(hb, CF.animal_of(Color(r["color"])).capitalize(), 12, Color(INK, 0.7))
-		if r["host"] or not r["connected"]:
-			_label(hb, "offline" if not r["connected"] else "host", 12, Color(INK, 0.7))
+	var roster: Array = info["roster"]
+	for i in _lobby_slots.size():
+		var slot: Dictionary = _lobby_slots[i]
+		if i >= roster.size():
+			slot["cell"].modulate.a = 0.3
+			slot["dot"].color = Color(INK, 0.25)
+			slot["name"].text = "Open"
+			slot["animal"].text = ""
+			slot["tag"].text = ""
+			continue
+		var r: Dictionary = roster[i]
+		slot["cell"].modulate.a = 1.0 if r["connected"] else 0.45
+		slot["dot"].color = Color(r["color"])
+		slot["name"].text = str(r["name"]) + (" (you)" if r["id"] == my_id else "")
+		slot["animal"].text = CF.animal_of(Color(r["color"])).capitalize()
+		slot["tag"].text = "offline" if not r["connected"] else ("host" if r["host"] else "")
 		if r["host"]:
 			host_name = r["name"]
 			is_host = r["id"] == my_id
