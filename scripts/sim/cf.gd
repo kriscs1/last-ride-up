@@ -141,6 +141,9 @@ const STEAM_ITEM_IDS := {
 	"face_shades": 202, "face_monocle": 203, "face_eyepatch": 204, "face_mustache": 205,
 }
 const STEAM_IDENTITY := "lastrideup"   # GetAuthTicketForWebApi identity, checked by the server
+## OAuth 2.0 "Web application" client id from the Play Games Services project (Google Cloud console).
+## The server holds the matching secret (GPGS_CLIENT_ID / GPGS_CLIENT_SECRET). Empty: Play Games sign-in is off.
+const GPGS_SERVER_CLIENT_ID := ""
 
 
 # Quick-chat: preset lines only, so nothing typed by players is ever shown to others.

@@ -53,6 +53,11 @@ func _init() -> void:
 	_test("chat: set phrases only, a cooldown, and a real player for {p}", _t_chat_rules)
 	_test("safety: reports are logged once each and enough of them mute a player", _t_reports)
 	_test("safety: the host can turn voice off and remove a player for good", _t_host_controls)
+	_test("accounts: a device id needs its secret, and accounts are saved", _t_accounts_device)
+	_test("accounts: a platform sign-in links to the guest account, or merges it", _t_accounts_link)
+	_test("accounts: banned accounts are refused, and room removals follow the account", _t_accounts_bans)
+	_test("accounts: Game Center signatures are checked against the certificate's key", _t_game_center)
+	_test("accounts: a store receipt only counts for the account that sent it first", _t_receipt_claims)
 	print("\n%d passed, %d failed" % [_passes, _failures])
 	quit(1 if _failures > 0 else 0)
 
@@ -1188,4 +1193,200 @@ func _t_host_controls() -> String:
 	if out == "" and not r.is_banned(other):
 		out = "a removed player could come back"
 	net.free()
+	return out
+
+
+func _accounts() -> Array:
+	## [net, accounts] with test files, outside the scene tree (no sockets, no HTTP).
+	var net: Node = load("res://scripts/net/net.gd").new()
+	var acc: Node = load("res://scripts/net/accounts.gd").new()
+	acc.save_path = "user://test_accounts.json"
+	acc.bans_path = "user://test_bans.txt"
+	for f in [acc.save_path, acc.bans_path]:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(f))
+	net.accounts = acc
+	net.add_child(acc)
+	return [net, acc]
+
+
+func _accounts_done(v: Array) -> void:
+	for f in [v[1].save_path, v[1].bans_path]:
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(f))
+	v[0].free()
+
+
+func _guest(acc: Node, dev: String, secret: String, slot_id := "s") -> CFSlot:
+	var s := CFSlot.new()
+	s.id = slot_id
+	s.name = "Kris"
+	acc.sign_in(s, "device", {"id": dev, "secret": secret})
+	return s
+
+
+func _t_accounts_device() -> String:
+	var v := _accounts()
+	var acc: Node = v[1]
+	var dev := "ab".repeat(16)
+	var sec := "cd".repeat(32)
+	var out := ""
+	var a := _guest(acc, dev, sec)
+	if a.account_id == "" or a.platform != "device":
+		out = "no account for a new device"
+	var b := _guest(acc, dev, sec)
+	if out == "" and b.account_id != a.account_id:
+		out = "the same device got a second account"
+	var c := _guest(acc, dev, "ef".repeat(32))
+	if out == "" and c.account_id != "":
+		out = "a wrong secret signed in"
+	var d := _guest(acc, "xyz", sec)
+	if out == "" and d.account_id != "":
+		out = "a malformed device id signed in"
+	if out == "" and FileAccess.get_file_as_string(acc.save_path).find(sec) >= 0:
+		out = "the secret itself was saved"
+	var again: Node = load("res://scripts/net/accounts.gd").new()
+	again.save_path = acc.save_path
+	again.bans_path = acc.bans_path
+	again.load_all()
+	if out == "" and again.links.get("device:" + dev, "") != a.account_id:
+		out = "accounts were not saved"
+	again.free()
+	_accounts_done(v)
+	return out
+
+
+func _t_accounts_link() -> String:
+	var v := _accounts()
+	var acc: Node = v[1]
+	var out := ""
+	# A guest buys something, then signs in with Steam: same account, Steam linked to it.
+	var a := _guest(acc, "11".repeat(16), "22".repeat(32), "a")
+	var guest_id := a.account_id
+	a.owned["hat_crown"] = true
+	acc.remember_owned(a)
+	a.steamid = "7656"
+	acc.steam_verified(a)
+	if a.account_id != guest_id or a.platform != "steam":
+		out = "Steam made a new account instead of linking (%s, %s)" % [a.account_id, a.platform]
+	# A second device, then the same Steam account: the second guest merges in.
+	var b := _guest(acc, "33".repeat(16), "44".repeat(32), "b")
+	var b_guest := b.account_id
+	b.owned["face_monocle"] = true
+	acc.remember_owned(b)
+	b.steamid = "7656"
+	acc.steam_verified(b)
+	if out == "" and b.account_id != guest_id:
+		out = "the second device didn't reach the Steam account"
+	if out == "" and acc.accounts.has(b_guest):
+		out = "the merged guest account was left behind"
+	if out == "" and not (b.owned.has("hat_crown") and acc.accounts[guest_id]["owned"].has("face_monocle")):
+		out = "purchases weren't combined: %s / %s" % [str(b.owned.keys()), str(acc.accounts[guest_id]["owned"])]
+	var c := _guest(acc, "33".repeat(16), "44".repeat(32), "c")
+	if out == "" and c.account_id != guest_id:
+		out = "the merged device doesn't sign in to the Steam account"
+	# Signing in on the device again never moves someone off their platform account.
+	var other := _guest(acc, "55".repeat(16), "66".repeat(32), "o")
+	acc.sign_in(a, "device", {"id": "55".repeat(16), "secret": "66".repeat(32)})
+	if out == "" and a.account_id != guest_id:
+		out = "a device sign-in moved a Steam player to another account"
+	if out == "" and other.account_id == guest_id:
+		out = "the other device was pulled in"
+	_accounts_done(v)
+	return out
+
+
+func _t_accounts_bans() -> String:
+	var v := _accounts()
+	var net: Node = v[0]
+	var acc: Node = v[1]
+	var out := ""
+	var a := _guest(acc, "77".repeat(16), "88".repeat(32), "a")
+	acc.ban(a.account_id, "abuse")
+	var a2 := _guest(acc, "77".repeat(16), "88".repeat(32), "a2")
+	if not a2.refused:
+		out = "a banned account was let in"
+	acc.ban("steam:999")
+	var b := _guest(acc, "99".repeat(16), "aa".repeat(32), "b")
+	if out == "" and b.refused:
+		out = "refused before the Steam account was known"
+	b.steamid = "999"
+	acc.steam_verified(b)
+	if out == "" and not b.refused:
+		out = "a banned Steam account was let in"
+	# Lifting a ban by editing bans.txt takes effect without a restart.
+	var f := FileAccess.open(acc.bans_path, FileAccess.WRITE)
+	f.store_line("# nobody banned")
+	f.close()
+	acc.reload_bans(true)
+	if out == "" and acc.ban_reason(a.account_id) != null:
+		out = "the ban wasn't lifted"
+	# A host removal follows the account, not the session.
+	var r := CFRoom.new("TESTAC", true, net)
+	var host := _room_slot(r, "h", "owl")
+	var c := _guest(acc, "bb".repeat(16), "cc".repeat(32), "c")
+	r.join(c)
+	r.kick(host, c.id)
+	var c2 := _guest(acc, "bb".repeat(16), "cc".repeat(32), "c2")
+	if out == "" and not r.is_banned(c2):
+		out = "a removed player came back with a new session"
+	_accounts_done(v)
+	return out
+
+
+func _t_game_center() -> String:
+	var acc: Node = load("res://scripts/net/accounts.gd").new()
+	var out := ""
+	var crypto := Crypto.new()
+	var key := crypto.generate_rsa(2048)
+	var cert := crypto.generate_self_signed_certificate(key, "CN=gc-test,O=Test,C=US")
+	var pem := cert.save_to_string()
+	var body := pem.get_slice("-----BEGIN CERTIFICATE-----", 1).get_slice("-----END CERTIFICATE-----", 0)
+	var der := Marshalls.base64_to_raw(body.replace("\n", "").strip_edges())
+	var salt := crypto.generate_random_bytes(4)
+	var ts := 1764000000123
+	var payload: PackedByteArray = acc.gc_payload("T:_abc123", "com.example.lastrideup", ts, salt)
+	if payload.size() != "T:_abc123".length() + "com.example.lastrideup".length() + 8 + 4 or payload[-5] != (ts & 0xff):
+		out = "payload layout"
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	ctx.update(payload)
+	var sig := crypto.sign(HashingContext.HASH_SHA256, ctx.finish(), key)
+	if out == "" and acc.spki_from_der(der).is_empty():
+		out = "no public key found in the certificate"
+	if out == "" and not acc.gc_verify(der, payload, sig):
+		out = "a good signature failed"
+	var other: PackedByteArray = acc.gc_payload("T:_someoneelse", "com.example.lastrideup", ts, salt)
+	if out == "" and acc.gc_verify(der, other, sig):
+		out = "a signature for another player passed"
+	var wrong := crypto.generate_self_signed_certificate(crypto.generate_rsa(2048), "CN=other,O=Test,C=US").save_to_string()
+	var wder := Marshalls.base64_to_raw(wrong.get_slice("-----BEGIN CERTIFICATE-----", 1).get_slice("-----END CERTIFICATE-----", 0).replace("\n", "").strip_edges())
+	if out == "" and acc.gc_verify(wder, payload, sig):
+		out = "another certificate's key passed"
+	if out == "" and not acc.spki_from_der(PackedByteArray([0x30, 0x82, 0xff])).is_empty():
+		out = "garbage parsed as a certificate"
+	for bad in ["http://static.gc.apple.com/x.cer", "https://evilapple.com/x.cer", "https://static.gc.apple.com.evil.net/x.cer"]:
+		if out == "" and acc.cert_url_ok(bad):
+			out = "accepted %s" % bad
+	if out == "" and not acc.cert_url_ok("https://static.gc.apple.com/public-key/gc-prod-10.cer"):
+		out = "rejected Apple's certificate address"
+	acc.free()
+	return out
+
+
+func _t_receipt_claims() -> String:
+	var v := _accounts()
+	var acc: Node = v[1]
+	var out := ""
+	var a := _guest(acc, "d1".repeat(16), "e1".repeat(32), "a")
+	var b := _guest(acc, "d2".repeat(16), "e2".repeat(32), "b")
+	var play := {"store": "google_play", "json": "{\"productId\":\"hat_crown\"}", "sig": "x"}
+	var apple := {"store": "app_store", "transaction_id": "1234"}
+	var test := {"store": "test", "product": "hat_chef"}
+	if acc.claim_proofs(a, [play, apple, test]).size() != 3:
+		out = "the first sender's receipts were dropped"
+	if out == "" and acc.claim_proofs(a, [play, apple]).size() != 2:
+		out = "sending your own receipts again was refused"
+	var got: Array = acc.claim_proofs(b, [play, apple, test, "junk"])
+	if out == "" and got != [test]:
+		out = "another account used copied receipts: %s" % str(got)
+	_accounts_done(v)
 	return out

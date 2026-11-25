@@ -19,7 +19,7 @@ var net                      # the Net autoload (untyped: its RPC methods are lo
 var voice_allowed := true    # the host can turn voice chat off for the room
 var chat_log: Array = []     # recent quick-chat lines, attached to reports
 var reports := {}            # reported id -> {reporter id: reason index}
-var banned := {}             # slot ids and addresses the host removed
+var banned := {}             # slot ids, "acct:<id>" and "steam:<id>" the host removed
 
 
 static func make_code() -> String:
@@ -338,8 +338,9 @@ func find_slot(id: String) -> CFSlot:
 
 
 func is_banned(slot: CFSlot) -> bool:
-	## By player and Steam account, not address: a whole household or school shares one address.
-	return banned.has(slot.id) or (slot.steamid != "" and banned.has("steam:" + slot.steamid))
+	## By player and account, not address: a whole household or school shares one address.
+	return banned.has(slot.id) or (slot.account_id != "" and banned.has("acct:" + slot.account_id)) \
+		or (slot.steamid != "" and banned.has("steam:" + slot.steamid))
 
 
 func hears(a: CFSlot, b: CFSlot, proximity: bool) -> bool:
@@ -420,9 +421,11 @@ func report(from: CFSlot, target_id: String, reason: int) -> void:
 	by[from.id] = reason
 	reports[target_id] = by
 	if first:
+		var total: int = net.accounts.note_report(t) if net.get("accounts") else 0
 		net.log_report({"time": Time.get_datetime_string_from_system(true), "room": code, "private": is_private,
-			"reporter": {"id": from.id, "name": from.name, "steamid": from.steamid},
-			"reported": {"id": t.id, "name": t.name, "steamid": t.steamid, "voice": t.voice_mode},
+			"reporter": {"id": from.id, "name": from.name, "account": from.account_id, "steamid": from.steamid},
+			"reported": {"id": t.id, "name": t.name, "account": t.account_id, "platform": t.platform,
+				"steamid": t.steamid, "voice": t.voice_mode, "reports_ever": total},
 			"reason": CF.REPORT_REASONS[reason], "reports_in_room": by.size(), "recent_chat": chat_log.duplicate()})
 	if from.peer != 0:
 		net.s_notice.rpc_id(from.peer, "Thanks. Your report was sent, and %s is muted for you." % t.name)
@@ -446,6 +449,8 @@ func kick(host: CFSlot, target_id: String) -> void:
 	if host == null or host.id != host_id or t == null or t == host:
 		return
 	banned[t.id] = true
+	if t.account_id != "":
+		banned["acct:" + t.account_id] = true
 	if t.steamid != "":
 		banned["steam:" + t.steamid] = true
 	if t.peer != 0:

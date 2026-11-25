@@ -23,6 +23,9 @@ signal voice_received(from_id: String, seq: int, data: PackedByteArray)
 signal chat_received(from_id: String, idx: int, target_id: String)
 signal notice_received(message: String)
 signal removed_from_room(message: String)
+signal signed_in(account_id: String, platform: String, display: String)
+signal sign_in_failed(platform: String, message: String)
+signal refused(message: String)
 
 var role := "none"   # none, server, client
 
@@ -33,6 +36,8 @@ var slots_by_peer := {}    # peer id → CFSlot
 var _housekeeping_t := 0.0
 var steam_shop: Node      # server only: Steam purchases
 var receipts: Node        # server only: Google Play / App Store purchase checks
+var accounts: Node        # server only: player accounts and bans (accounts.gd)
+var refused_message := "" # client: the server turned us away (banned); don't reconnect
 
 
 func _ready() -> void:
@@ -59,6 +64,8 @@ func start_server(port: int) -> void:
 	(multiplayer as SceneMultiplayer).server_relay = false
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	role = "server"
+	accounts = preload("res://scripts/net/accounts.gd").new()
+	add_child(accounts)
 	steam_shop = preload("res://scripts/net/steam_shop.gd").new()
 	add_child(steam_shop)
 	receipts = preload("res://scripts/net/receipts.gd").new()
@@ -78,6 +85,7 @@ func _physics_process(delta: float) -> void:
 	if _housekeeping_t >= 1.0:
 		_housekeeping_t = 0.0
 		_housekeeping()
+		accounts.poll(1.0)
 
 
 func _housekeeping() -> void:
@@ -114,7 +122,30 @@ func _on_peer_disconnected(peer: int) -> void:
 func _sender_slot() -> CFSlot:
 	if role != "server":
 		return null
-	return slots_by_peer.get(multiplayer.get_remote_sender_id())
+	var s: CFSlot = slots_by_peer.get(multiplayer.get_remote_sender_id())
+	return null if s == null or s.refused else s
+
+
+func _signed_in_slot() -> CFSlot:
+	## Rooms need an account, so bans and reports stick to someone.
+	var s := _sender_slot()
+	if s and s.account_id == "":
+		s_error.rpc_id(s.peer, "Still signing in; try again in a moment.")
+		return null
+	return s
+
+
+func refuse(s: CFSlot, message: String) -> void:
+	## A banned player: tell them why, take them out of their room and hang up.
+	s.refused = true
+	_leave_current(s)
+	slots_by_token.erase(s.token)
+	if s.peer != 0:
+		var peer := s.peer
+		s_refused.rpc_id(peer, message)
+		get_tree().create_timer(0.5).timeout.connect(func():
+			if multiplayer.multiplayer_peer and peer in multiplayer.get_peers():
+				multiplayer.multiplayer_peer.disconnect_peer(peer))
 
 
 func _sender_room() -> CFRoom:
@@ -197,16 +228,24 @@ func c_look(animal: String, hat: String, face: String) -> void:
 
 func owned_changed(s: CFSlot) -> void:
 	## A purchase was checked: if the player is wearing it, everyone in the room now sees it.
+	accounts.remember_owned(s)
 	var r: CFRoom = rooms.get(s.room_code)
 	if r:
 		r.broadcast_room()
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func c_proofs(proofs: Array) -> void:
+func c_sign_in(platform: String, creds: Dictionary) -> void:
 	var s := _sender_slot()
+	if s and creds.size() <= 8:
+		accounts.sign_in(s, platform, creds)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func c_proofs(proofs: Array) -> void:
+	var s := _signed_in_slot()
 	if s:
-		receipts.check(proofs, func(pid: String):
+		receipts.check(accounts.claim_proofs(s, proofs), func(pid: String):
 			if not s.owned.has(pid):
 				s.owned[pid] = true
 				owned_changed(s))
@@ -242,7 +281,7 @@ func c_steam_owned() -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func c_quick() -> void:
-	var s := _sender_slot()
+	var s := _signed_in_slot()
 	if s == null:
 		return
 	_leave_current(s)
@@ -255,7 +294,7 @@ func c_quick() -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func c_create(is_private: bool) -> void:
-	var s := _sender_slot()
+	var s := _signed_in_slot()
 	if s == null:
 		return
 	_leave_current(s)
@@ -264,7 +303,7 @@ func c_create(is_private: bool) -> void:
 
 @rpc("any_peer", "call_remote", "reliable")
 func c_join(code: String) -> void:
-	var s := _sender_slot()
+	var s := _signed_in_slot()
 	if s == null:
 		return
 	var r: CFRoom = rooms.get(code.strip_edges().to_upper())
@@ -441,6 +480,7 @@ func _on_server_gone() -> void:
 func send_hello(pname: String, token: String) -> void: c_hello.rpc_id(1, pname, token)
 func send_look(animal: String, hat: String, face: String) -> void: c_look.rpc_id(1, animal, hat, face)
 func send_proofs(proofs: Array) -> void: c_proofs.rpc_id(1, proofs)
+func send_sign_in(platform: String, creds: Dictionary) -> void: c_sign_in.rpc_id(1, platform, creds)
 func send_steam_auth(ticket_hex: String) -> void: c_steam_auth.rpc_id(1, ticket_hex)
 func send_steam_buy(product: String) -> void: c_steam_buy.rpc_id(1, product)
 func send_steam_finalize(order_id: String) -> void: c_steam_finalize.rpc_id(1, order_id)
@@ -549,3 +589,19 @@ func s_notice(message: String) -> void:
 @rpc("authority", "call_remote", "reliable")
 func s_removed(message: String) -> void:
 	removed_from_room.emit(message)
+
+
+@rpc("authority", "call_remote", "reliable")
+func s_signed_in(account_id: String, platform: String, display: String) -> void:
+	signed_in.emit(account_id, platform, display)
+
+
+@rpc("authority", "call_remote", "reliable")
+func s_sign_in_failed(platform: String, message: String) -> void:
+	sign_in_failed.emit(platform, message)
+
+
+@rpc("authority", "call_remote", "reliable")
+func s_refused(message: String) -> void:
+	refused_message = message
+	refused.emit(message)

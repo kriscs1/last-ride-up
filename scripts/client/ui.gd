@@ -39,6 +39,7 @@ var name_edit: LineEdit
 var address_edit: LineEdit
 var code_edit: LineEdit
 var status_label: Label
+var account_label: Label
 
 var _screens := {}
 var _hud: Control
@@ -273,6 +274,9 @@ func _build_menu() -> void:
 	_volume_row(box)
 	status_label = _label(box, "", 13)
 	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	account_label = _label(box, "", 12, Color(INK, 0.75))
+	account_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	account_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	var note := _label(box, "Online prototype (Milestone 3). Start a server with: godot --headless --path . -- --server", 12, Color(INK, 0.7))
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -363,6 +367,10 @@ func server_address() -> Array:
 		port = int(a.substr(i + 1))
 		a = a.substr(0, i)
 	return [a, port]
+
+
+func set_account(text: String) -> void:
+	account_label.text = text
 
 
 func set_status(text: String, is_error := false) -> void:

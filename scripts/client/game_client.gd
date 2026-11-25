@@ -83,6 +83,9 @@ func _ready() -> void:
 	Net.chat_received.connect(ui.talk.show_chat)
 	Net.notice_received.connect(func(msg): ui.toast(msg, "vio"))
 	Net.removed_from_room.connect(_on_removed)
+	Net.refused.connect(_on_refused)
+	Account.changed.connect(func(): ui.set_account(Account.status_text()))
+	ui.set_account(Account.status_text())
 
 
 # ---------------------------------------------------------------- talking
@@ -225,6 +228,7 @@ func _act(action: Callable) -> void:
 
 
 func _connect() -> void:
+	Net.refused_message = ""
 	var addr := ui.server_address()
 	ui.set_status("Connecting to %s:%d…" % [addr[0], addr[1]])
 	Net.connect_to(addr[0], addr[1])
@@ -242,8 +246,18 @@ func _on_connection_failed() -> void:
 		ui.set_status("Could not reach the server. Check the address and that the server is running.", true)
 
 
+func _on_refused(msg: String) -> void:
+	## Banned: back to the menu, and no reconnecting.
+	_retry_t = -1.0
+	pending_action = Callable()
+	_on_removed(msg)
+
+
 func _on_disconnected() -> void:
 	my_id = ""
+	if Net.refused_message != "":
+		ui.set_status(Net.refused_message, true)
+		return
 	if in_room:
 		ui.toast("Connection lost. Reconnecting…", "bad")
 		_retry_t = 1.5

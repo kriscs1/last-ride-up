@@ -124,7 +124,7 @@ Audio is 16 kHz mono in 40 ms packets, IMA ADPCM (`scripts/net/cf_voice_codec.gd
 
 - **Turning voice on:** the first time, a notice explains that nearby players will hear you, asks players not to share personal details, says that anyone can mute and report, and that voice is for ages 13 and up.
 - **Mute** a player (voice and chat, just for you), or **Mute all voices**. Mutes reset when you change room.
-- **Report** a player for a reason: offensive name, hateful speech, harassment, sexual content, sharing personal info, cheating, or other. Reporting also mutes them for you. Each report is written as one JSON line to `user://reports.jsonl` on the server, and printed to its log. A line holds who reported whom, the reason, any Steam ids, and the room's last 30 quick-chat lines. Voice is never recorded.
+- **Report** a player for a reason: offensive name, hateful speech, harassment, sexual content, sharing personal info, cheating, or other. Reporting also mutes them for you. Each report is written as one JSON line to `user://reports.jsonl` on the server, and printed to its log. A line holds who reported whom (with their account ids and how many reports the account has had in total), the reason, any Steam ids, and the room's last 30 quick-chat lines. Voice is never recorded.
 - **Room mute:** when enough different players in a room report the same person, the server stops relaying their voice and chat for the rest of the room's life. That is half the other players, at least 2 and at most 3. If anyone gave "Offensive name" as the reason, the person's name is also replaced with their animal.
 - **Host controls:**
   - Turn voice off for the whole room. Quick chat keeps working.
@@ -142,9 +142,61 @@ Audio is 16 kHz mono in 40 ms packets, IMA ADPCM (`scripts/net/cf_voice_codec.gd
   - timely action on reports;
   - published contact details.
 
-  The game covers the first two. You need to provide the rest: someone who reads `reports.jsonl` and can ban accounts or devices, a contact address in the store listing, and a privacy policy that mentions voice relay and report logs.
+  The game covers the first two, and gives you the means for the third (bans, see below). You need to provide the rest: someone who reads `reports.jsonl` and bans accounts that deserve it, a contact address in the store listing, and a privacy policy that mentions accounts, voice relay and report logs.
 - **Age ratings.** Declare unrestricted voice chat in the questionnaires: IARC on Google Play, the App Store age rating, and Steam's content survey. If you target children, leave voice off for them. Quick chat alone usually satisfies "limited communication".
-- **Removals.** A removed player can still rejoin the room if they restart the game, because a new session gets a new id. Player accounts would close that gap.
+- **Removals** follow the account: a removed player can't come back to that room by restarting the game.
+
+## Player accounts and sign-in
+
+Every player has an account on the server, kept in `user://accounts.json` (`scripts/net/accounts.gd`). Bans, report counts and checked purchases attach to it. The menu shows how you are signed in.
+
+**How a player signs in.** Each time the game connects, it proves who the player is, and the server links that proof to an account:
+
+| Proof | Where | What the server checks |
+|---|---|---|
+| Device id | every build | The game makes a random id and secret on first start (`user://device.cfg`). The server keeps only a SHA-256 of the secret, and an id only works with its secret. |
+| Steam | desktop with GodotSteam | The Web API ticket the shop already uses, checked with `AuthenticateUserTicket`. |
+| Google Play Games | Android with the plugin | A one-time server auth code. The server swaps it at Google for a token, then reads the player id from `games/v1/players/me`. |
+| Game Center | iOS with the plugin | Apple's identity signature over player id, bundle id, timestamp and salt. It is checked with the public key from Apple's certificate, fetched over https from an `apple.com` host, and must be under an hour old. |
+
+The device id is always sent first, so everyone has an account before they join a room. The server refuses room requests until then. When a guest later signs in on a platform, their device account is merged into the platform account, purchases included. Signing in on another phone with the same platform account reaches the same account.
+
+**Banning.** Put one account id (from `reports.jsonl` or `accounts.json`) or one link per line in `user://bans.txt` on the server, optionally followed by a reason:
+
+```text
+a3f09c21b7e4d harassment in voice, 3 reports
+steam:76561198000000000 cheating
+```
+
+The server re-reads the file every 5 seconds, with no restart needed. Banned players who are online are disconnected with the reason, and banned accounts can't connect. Delete a line to lift a ban. A banned guest can reinstall to get a new device id. A platform ban (Steam, Google Play Games, Game Center) doesn't have that hole.
+
+**Receipts belong to accounts.** A Google Play purchase or App Store transaction counts only for the first account that sends it. Copying another player's purchase data no longer shows their items. Checked purchases are remembered on the account. Refunds aren't removed from it yet.
+
+**Setting it up**
+
+- **Steam:** nothing extra. It uses `STEAM_PUBLISHER_KEY` and `STEAM_APP_ID` (see *Selling cosmetics*).
+- **Google Play Games:**
+  1. Add the [godot-play-game-services](https://github.com/godot-sdk-integrations/godot-play-game-services) plugin to the Android export.
+  2. In Play Console, set up Play Games Services with an Android credential.
+  3. In the same Google Cloud project, create an OAuth client of type *Web application*.
+  4. Put its client id in `CF.GPGS_SERVER_CLIENT_ID`.
+  5. Give the server `GPGS_CLIENT_ID` and `GPGS_CLIENT_SECRET`.
+- **Game Center:** add the `GameCenter` plugin from [godot-ios-plugins](https://github.com/godot-sdk-integrations/godot-ios-plugins), turn on the Game Center capability, and give the server `APPLE_BUNDLE_ID`.
+- Any platform that isn't set up falls back to the device id, and the game still works.
+
+**Tested:**
+
+- Device sign-in, joining, and a live ban (kicked, then refused on retry), against a real server.
+- Google Play Games' code exchange against a local mock of Google's endpoints.
+- Linking, merging, bans, receipt claims, and the Game Center signature check against a generated certificate, in `tests/run_tests.gd`.
+
+**Not yet tested** inside real exported builds:
+
+- The two mobile plugins. Their method and signal names differ between versions, so `scripts/client/account.gd` tries both spellings.
+- Apple's live certificate.
+
+The Game Center check trusts the certificate because of the https download from Apple. It doesn't walk the certificate chain.
+
 
 ## Project layout
 
@@ -153,9 +205,10 @@ project.godot            Godot 4.7, GL Compatibility renderer (best for phones),
 scenes/main.tscn         entry scene → scripts/main.gd
 scripts/sim/             shared rules (no nodes, no network): CF config, CFSim, CFLevel, CFVeins, CFMaps, state classes
 scripts/sim/maps/        one file per map (ASCII layout, rooms with themes, props, sky theme)
-scripts/net/             Net autoload (all RPCs), CFRoom, CFSlot, CFWire, CFVoiceCodec
+scripts/net/             Net autoload (all RPCs), CFRoom, CFSlot, CFWire, CFVoiceCodec,
+                         accounts.gd (sign-in, bans), steam_shop.gd / receipts.gd (purchase checks)
 scripts/client/          CFGameClient (prediction, interpolation), CFWorldView (drawing), CFUI, CFTouchControls, CFMapOverlay,
-                         Store (purchases), Sfx (sound effects and music, synthesised at start-up),
+                         Account (sign-in), Store (purchases), Sfx (sound effects and music, synthesised at start-up),
                          CFVoice (microphone and playback), CFTalkUI (quick chat, Players & voice screen)
 tests/run_tests.gd       headless rule tests
 tools/                   lint_gd.py (static checks), build_maps.py / check_map.py / render_map_preview.py (maps)
@@ -181,7 +234,7 @@ Example server: `STEAM_PUBLISHER_KEY=… STEAM_APP_ID=… GOOGLE_PLAY_PUBLIC_KEY
 
 **Still to check with real accounts:** each store plugin inside a real exported build, and Apple's live API hosts. The GodotSteam signal *arguments* (the names are confirmed) are read defensively, so they work with either buffer format.
 
-Store receipts are not tied to a game account. Someone who copies another player's Google purchase data or App Store transaction id could show those items too. Closing that gap needs player accounts.
+Each store receipt is tied to the first account that sends it (see *Player accounts and sign-in*).
 
 ## Exporting
 

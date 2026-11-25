@@ -82,6 +82,9 @@ func authenticate(slot: CFSlot, ticket_hex: String) -> void:
 			push_warning("Steam ticket rejected: %s" % str(resp))
 			return
 		slot.steamid = str(params["steamid"])
+		get_parent().accounts.steam_verified(slot)
+		if slot.refused:
+			return
 		_grant_recorded(slot)
 		_call("GET", txn + "/GetUserInfo/v2/", {"key": key, "appid": app_id, "steamid": slot.steamid}, func(info: Dictionary):
 			var p = info.get("params", {})
