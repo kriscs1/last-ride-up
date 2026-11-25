@@ -137,6 +137,9 @@ func grant(pid: String, proof := {}) -> void:
 		proofs[pid] = proof
 	save_owned()
 	owned_changed.emit()
+	var sfx := get_node_or_null("/root/Sfx") if is_inside_tree() else null
+	if sfx:
+		sfx.play("buy")
 	_share()
 
 

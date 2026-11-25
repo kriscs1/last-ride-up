@@ -91,7 +91,8 @@ var _end_stats: GridContainer
 var _end_players: GridContainer
 var _btn_slider: HSlider
 var _lefty: CheckBox
-var settings := {"button_scale": 1.0, "left_handed": false, "name": "", "address": "127.0.0.1", "animal": "fox", "hat": "none", "face": "none"}
+var _volume_sliders: Array = []   # [slider, settings key], on the main menu and in the pause menu
+var settings := {"button_scale": 1.0, "left_handed": false, "name": "", "address": "127.0.0.1", "animal": "fox", "hat": "none", "face": "none", "music_volume": 0.6, "sound_volume": 0.8}
 var _look_preview: LookPreview
 var _look_values := {}
 var _look_try := {"hat": "none", "face": "none"}   # shown in the preview; may be a locked item
@@ -179,6 +180,7 @@ func _button(parent: Node, text: String, primary := true) -> Button:
 	b.add_theme_stylebox_override("focus", _style(Color(0, 0, 0, 0), INK, 12))
 	b.add_theme_color_override("font_color", Color("#2a1a05") if primary else INK)
 	b.add_theme_color_override("font_hover_color", Color("#2a1a05") if primary else INK)
+	b.pressed.connect(Sfx.play.bind("click", 0.6, 0.0))
 	parent.add_child(b)
 	return b
 
@@ -257,6 +259,7 @@ func _build_menu() -> void:
 	join.pressed.connect(_on_join)
 	code_edit.text_submitted.connect(func(_t): _on_join())
 	_button(box, "Customize explorer", false).pressed.connect(open_look)
+	_volume_row(box)
 	status_label = _label(box, "", 13)
 	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	var note := _label(box, "Online prototype (Milestone 3). Start a server with: godot --headless --path . -- --server", 12, Color(INK, 0.7))
@@ -278,6 +281,33 @@ func _on_button_scale(v: float) -> void:
 	settings["button_scale"] = v
 	_apply_settings()
 	_save_settings()
+
+
+func _volume_row(box: Control) -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 8)
+	box.add_child(row)
+	for kv in [["Music", "music_volume"], ["Sounds", "sound_volume"]]:
+		_label(row, kv[0], 14, Color(INK, 0.85))
+		var sl := HSlider.new()
+		sl.min_value = 0.0
+		sl.max_value = 1.0
+		sl.step = 0.05
+		sl.custom_minimum_size = Vector2(130, 32)
+		sl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		sl.value = settings[kv[1]]
+		sl.value_changed.connect(_on_volume.bind(kv[1]))
+		row.add_child(sl)
+		_volume_sliders.append([sl, kv[1]])
+
+
+func _on_volume(v: float, key: String) -> void:
+	settings[key] = v
+	_apply_settings()
+	_save_settings()
+	if key == "sound_volume":
+		Sfx.play("coin", 0.8, 0.0)   # a sample at the new level
 
 
 func _on_lefty(on: bool) -> void:
@@ -528,6 +558,7 @@ func _build_pause() -> void:
 	_lefty.text = "Left-handed layout"
 	_lefty.toggled.connect(_on_lefty)
 	box.add_child(_lefty)
+	_volume_row(box)
 	var n := _label(box, "The match keeps running while this menu is open.", 12, Color(INK, 0.7))
 	n.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	var row := HBoxContainer.new()
@@ -1031,6 +1062,8 @@ func _apply_settings() -> void:
 	if _btn_slider:
 		_btn_slider.set_value_no_signal(settings["button_scale"])
 		_lefty.set_pressed_no_signal(settings["left_handed"])
+	for sk in _volume_sliders:
+		sk[0].set_value_no_signal(settings[sk[1]])
 	settings_changed.emit()
 
 

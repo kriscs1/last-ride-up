@@ -89,6 +89,12 @@ Button size and a left-handed layout are in the in-game menu.
 
 The server is authoritative. Clients send only inputs (30 packets a second, unreliable, each repeating the last few frames so a lost packet costs nothing). The server steps the rules at 60 Hz and sends snapshots 20 times a second. Pickups, loads, sabotage, timers and wins are reliable events. Your own character is predicted locally with the same `CFSim.step_movement` the server runs, then reconciled when snapshots arrive. Other players are drawn 100 ms in the past, interpolated between snapshots. If you drop out, your seat is held for 60 seconds and you rejoin the running match. See `docs/decisions/0002-networking.md`.
 
+## Sound
+
+There are no audio files. The `Sfx` autoload (`scripts/client/sfx.gd`) builds every sound effect and a small set of instrument notes in a background thread when the game starts (about half a second), then plays music with a tiny step sequencer. Each mood has a key, tempo, chord loop and a seeded melody that repeats every 8 bars: `menu`, one per map (`verdant`, `mines`, `marsh`) and `escape` while the skyship lifts off. Other players' sounds fade with distance. Music and Sounds volumes are on the main menu and the in-game Menu, and are saved with the other settings. Sound is off on the dedicated server and in headless runs.
+
+To use recorded audio instead, load your files into `_sounds` (effects, by name) and `_inst` (instrument notes pitched at C4, bass at C2) in place of the synthesised ones.
+
 ## Project layout
 
 ```text
@@ -97,7 +103,8 @@ scenes/main.tscn         entry scene → scripts/main.gd
 scripts/sim/             shared rules (no nodes, no network): CF config, CFSim, CFLevel, CFVeins, CFMaps, state classes
 scripts/sim/maps/        one file per map (ASCII layout, rooms with themes, props, sky theme)
 scripts/net/             Net autoload (all RPCs), CFRoom, CFSlot, CFWire
-scripts/client/          CFGameClient (prediction, interpolation), CFWorldView (drawing), CFUI, CFTouchControls, CFMapOverlay
+scripts/client/          CFGameClient (prediction, interpolation), CFWorldView (drawing), CFUI, CFTouchControls, CFMapOverlay,
+                         Store (purchases), Sfx (sound effects and music, synthesised at start-up)
 tests/run_tests.gd       headless rule tests
 tools/                   lint_gd.py (static checks), build_maps.py / check_map.py / render_map_preview.py (maps)
 docs/decisions/          architecture decision records
@@ -131,7 +138,7 @@ Store receipts are not tied to a game account. Someone who copies another player
 
 ## Known gaps (next up)
 
-- Art is procedural placeholder in the target palette, with Godot's default font. There is no audio yet.
+- Art is procedural placeholder in the target palette, with Godot's default font. Audio is synthesised in code (chiptune-ish); real recordings can replace the samples later without touching the game code.
 - Three maps, one character (Pip). Six characters come in Milestone 5. A fourth map, the Crown Spire tower, is planned.
 - Evidence and witnesses (who was near a tainted vein or a sabotaged lever) come with deduction in Milestone 4. There is no in-game chat yet, so meetings rely on voice chat.
 - Next for virality: an end-of-round replay that shows what the traitors really did, join-by-link with a web build, quick-chat and emotes, then sound and juice.

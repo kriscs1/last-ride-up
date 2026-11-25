@@ -35,6 +35,7 @@ var _retry_t := -1.0
 var _me_prev := Vector2.ZERO          # last physics-step position, for smooth drawing between steps
 var _mover_prev := {}
 var _area := ""
+var _foot := 0                      # footstep counter from my run phase
 
 
 func _ready() -> void:
@@ -43,6 +44,9 @@ func _ready() -> void:
 	add_child(view)
 	ui = CFUI.new()
 	add_child(ui)
+	ui.settings_changed.connect(func(): Sfx.set_volumes(ui.settings["music_volume"], ui.settings["sound_volume"]))
+	Sfx.set_volumes(ui.settings["music_volume"], ui.settings["sound_volume"])
+	Sfx.music("menu")
 	ui.quick_requested.connect(func(): _act(Net.send_quick))
 	ui.create_requested.connect(func(): _act(Net.send_create.bind(true)))
 	ui.join_requested.connect(func(code): _act(Net.send_join.bind(code)))
@@ -381,6 +385,11 @@ func _on_snapshot(s: Dictionary) -> void:
 			remotes.erase(id)
 	if (world.phase == "won" or world.phase == "lost") and not end_shown:
 		end_shown = true
+		var good := world.phase == "won"
+		if world.mode == "traitors":
+			good = world.winner == ("traitors" if info.get("role", "") == "traitor" else "explorers")
+		if me or good:
+			Sfx.play("win" if good else "lose")
 		get_tree().create_timer(0.9).timeout.connect(_show_end_if_world)
 
 
@@ -474,12 +483,16 @@ func _sample_input() -> CFInput:
 func _local_fx(type: String, d: Dictionary) -> void:
 	## My own jumps and landings show at once; no waiting for the server.
 	match type:
-		"jump": view.burst(Vector2(d["x"], d["y"]), 5, Color("#d9c39a"), true, 60.0, 0.3, 200.0)
+		"jump":
+			view.burst(Vector2(d["x"], d["y"]), 5, Color("#d9c39a"), true, 60.0, 0.3, 200.0)
+			Sfx.play("jump", 0.8)
 		"hit":
+			Sfx.play("hurt")
 			view.shake = 7.0
 			view.burst(Vector2(d["x"], d["y"]), 14, Color("#bfe9ff") if d["recover"] else Color("#ff8a6a"), false, 180.0)
 		"land":
 			view.burst(Vector2(d["x"], d["y"]), 10 if d["hard"] else 5, Color("#d9c39a"), true, 90.0, 0.35)
+			Sfx.play("land_hard" if d["hard"] else "land", 0.9 if d["hard"] else 0.6)
 			if d["hard"]:
 				view.shake = 4.0
 
@@ -487,6 +500,10 @@ func _local_fx(type: String, d: Dictionary) -> void:
 # ---------------------------------------------------------------- per-frame: interpolation, HUD
 
 func _process(delta: float) -> void:
+	var song := "menu"
+	if world:
+		song = "" if world.phase == "won" or world.phase == "lost" else ("escape" if world.phase == "escape" else world.map_id)
+	Sfx.music(song)
 	if world == null:
 		return
 	_interpolate_remotes()
@@ -502,6 +519,11 @@ func _process(delta: float) -> void:
 		me_draw.x = drawn.x + render_offset.x
 		me_draw.y = drawn.y + render_offset.y
 		view.act = CFSim.find_interaction(world, me)
+		var foot := floori(me.run_ph * 6.0 / PI)
+		if foot != _foot:
+			_foot = foot
+			if me.on_ground and absf(me.vx) > 20.0:
+				Sfx.play("step", 0.45, 0.15)
 		var a: Dictionary = view.act
 		view.hold_frac = 0.0
 		if a.get("hold", false):
@@ -565,6 +587,15 @@ func _name_of(pid) -> String:
 	return p.name if p else "Someone"
 
 
+## A sound from somewhere in the world: full volume if it's mine, fading with distance otherwise.
+func _hear(sound: String, e: Dictionary, mine: bool, volume := 1.0) -> void:
+	if mine or not e.has("x"):
+		Sfx.play(sound, volume)
+	else:
+		var ear := Vector2(me_draw.x, me_draw.y) if me else view.cam_center()
+		Sfx.play_at(sound, Vector2(e["x"], e["y"]), ear, volume)
+
+
 func _on_events(list: Array) -> void:
 	if world == null:
 		return
@@ -575,16 +606,23 @@ func _on_events(list: Array) -> void:
 			"jump":
 				if not mine:
 					view.burst(Vector2(e["x"], e["y"]), 4, Color("#d9c39a"), true, 60.0, 0.3, 200.0)
+					_hear("jump", e, false, 0.4)
 			"pickup":
+				_hear("coin" if e["kind"] == "coin" else "gem", e, mine, 0.8)
 				view.burst(Vector2(e["x"], e["y"]), 6 if e["kind"] == "coin" else 14, Color("#ffb347"))
 				if mine:
 					view.float_text(Vector2(e["x"], e["y"] - 14), "+%d" % e["amt"], Color("#ffe08a"))
 			"load":
+				Sfx.play("load", 1.0 if mine else 0.7)
 				view.burst(vault + Vector2(0, -28), 30, Color("#ffb347"), true, 260.0, 0.9)
 				view.float_text(vault + Vector2(0, -100), "+%d charge" % e["n"], Color("#a8f28f"))
 				if not mine:
 					ui.toast("%s loaded %d Sunstone%s" % [e["by"], e["n"], " (the Heartstone!)" if e.get("coop", false) else ""], "good")
 			"hurt":
+				if not mine:
+					_hear("hurt", e, false, 0.6)
+				if mine and e["lose"] > 0:
+					Sfx.play("bad", 0.7)
 				if not mine:
 					view.burst(Vector2(e["x"], e["y"]), 12, Color("#ff8a6a"), false, 160.0)
 				if e["lose"] > 0:
@@ -592,58 +630,76 @@ func _on_events(list: Array) -> void:
 				if mine and e["lose"] > 0:
 					ui.toast("Ouch! You spilled %d Sunstone on the last safe ground." % e["lose"], "bad")
 			"door_open":
+				Sfx.play("door")
 				view.shake = 3.0
 				ui.toast("Shortcut opened!" if mine else "%s opened a shortcut." % e["by"], "good")
 			"strike":
+				_hear("strike" if e["counts"] else "strike_dull", e, mine, 0.7)
 				view.burst(Vector2(e["x"], e["y"]), 8 if e["counts"] else 4, Color("#9fe8ff") if e["counts"] else Color("#d9c39a"), false, 150.0, 0.4)
 				if mine:
 					view.shake = maxf(view.shake, 2.0)
 			"crack":
+				_hear("crack_great" if e["great"] else "crack", e, mine)
 				view.shake = maxf(view.shake, 5.0 if e["great"] else 3.0)
 				view.burst(Vector2(e["x"], e["y"]), 30 if e["great"] else 16, Color("#ffb347"), true, 260.0, 0.8)
 				if e["great"] or e["surge"]:
 					ui.toast("%s cracked a %s!" % ["You" if mine else e["by"], "surging vein" if e["surge"] else "great vein"], "good")
 			"surge":
+				Sfx.play("chime")
 				ui.toast("Sunstone surge in the %s! Check the map." % e["area"], "good")
 			"bounty_done":
+				Sfx.play("chime")
 				ui.toast("Bounty complete: %s (+%d charge)" % [e["text"], e["reward"]], "good")
 			"fools":
+				Sfx.play("bad")
 				view.shake = 4.0
 				ui.toast(("Fool's stone! %d of your Sunstone was worthless. Someone tainted a vein." if mine else "%s's load fizzled: fool's stone from a tainted vein.") % (e["n"] if mine else e["by"]), "vio")
 			"cp":
+				Sfx.play("chime", 0.7)
 				ui.toast("Checkpoint reached")
 			"toast":
 				ui.toast(e["msg"], e.get("tone", ""))
 			"escape":
+				Sfx.play("fanfare")
 				ui.toast("Fully charged! The skyship is lifting off. Everyone get aboard!", "good")
 			"aboard":
+				Sfx.play("chime", 1.0 if mine else 0.5)
 				ui.toast("You are aboard! Waiting for the others…" if mine else "%s is aboard" % e["name"], "good")
 			"idol_waiting":
 				if not mine:
 					ui.toast("%s needs a second carrier at the Heartstone!" % e["name"], "vio")
 			"idol_lift":
+				Sfx.play("chime", 0.7)
 				ui.toast("%s lifted the Heartstone. Stay close together!" % e["by"], "vio")
 			"sab":
+				Sfx.play("sab")
 				ui.toast(e["msg"], "vio")
 				view.shake = 3.0
 			"bridge_down":
+				Sfx.play("alarm")
 				view.shake = 6.0
 				ui.toast("The bridge collapsed! Repair it at the lever on its west end. More hands repair faster.", "bad")
 			"repaired":
+				Sfx.play("chime")
 				var by: Array = e.get("by", [])
 				ui.toast(e["what"] + (" Thanks, %s." % " and ".join(PackedStringArray(by)) if by.size() > 0 else ""), "good")
 			"breach":
+				Sfx.play("alarm")
 				ui.toast("Engine breach! Close all three valves around camp.", "bad")
 			"valve":
+				Sfx.play("strike_dull", 0.8)
 				ui.toast("%s closed valve %d" % [e["by"], e["i"] + 1])
 			"breach_fixed":
+				Sfx.play("chime")
 				ui.toast("Breach sealed. The charge is safe.", "good")
 			"breach_fail":
+				Sfx.play("bad")
 				view.shake = 8.0
 				ui.toast("The furnace vented %d Sunstone. Gather more!" % e["loss"], "bad")
 			"left":
 				ui.toast("%s left the expedition" % e["name"])
 			"meeting":
+				Sfx.play("bell")
 				view.shake = 5.0
 				world.meeting["active"] = true
 				world.meeting["by"] = e["id"]
@@ -653,6 +709,7 @@ func _on_events(list: Array) -> void:
 			"voted":
 				world.meeting["votes"][e["id"]] = "?"
 			"meeting_end":
+				Sfx.play("bell", 0.6)
 				world.meeting["active"] = false
 				var out: CFPlayer = world.find_player(e["exiled"]) if e["exiled"] != "" else null
 				if out:

@@ -105,6 +105,10 @@ static func _h(a: int, b: int) -> float:
 	return float((x ^ (x >> 16)) & 0xffff) / 65535.0
 
 
+func cam_center() -> Vector2:
+	return cam.get_screen_center_position() if cam else Vector2.ZERO
+
+
 func set_match(match_view: CFMatch) -> void:
 	m = match_view
 	_ship_k = 0.0
